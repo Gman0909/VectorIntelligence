@@ -1,0 +1,30 @@
+# ── Build artifacts ──────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+
+# ── Runtime data — NEVER commit (contains personal data) ─────────
+# memory.db holds the user's own remembered facts; logs and botSdkInfo
+# hold IPs / GUIDs. These belong on the install machine, not in the repo.
+*.db
+*.log
+*.log.err
+botSdkInfo.json
+
+# ── Things created at install time (not part of the source) ──────
+# Wire-Pod is cloned, Whisper/VOSK downloaded, chipper built — locally.
+wire-pod/
+whisper.cpp/
+vendor/
+*.exe
+*.dll
+*.bin
+
+# ── Snapshots / archives ─────────────────────────────────────────
+*.zip
+VectorSnapshots/
+
+# ── OS cruft ─────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini

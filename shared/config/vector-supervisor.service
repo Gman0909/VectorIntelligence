@@ -1,0 +1,19 @@
+[Unit]
+Description=Vector Pod Supervisor
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__HOME__/vector-pod
+ExecStart=__HOME__/vector-pod/vector-ai/venv/bin/python __HOME__/vector-pod/supervisor.py
+Restart=on-failure
+RestartSec=5
+# KillMode=control-group (the default) tears down the whole cgroup — the
+# supervisor AND every child it spawned (chipper, vector-ai) — when the
+# service stops. This is the Linux equivalent of the Windows job object.
+KillMode=control-group
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

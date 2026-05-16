@@ -1,0 +1,15 @@
+# Keep line endings correct per platform so the bundle works for anyone.
+* text=auto
+
+# Linux shell scripts MUST be LF or they fail to run on Linux.
+*.sh   text eol=lf
+
+# Windows scripts want CRLF.
+*.ps1  text eol=crlf
+*.cmd  text eol=crlf
+
+# Cross-platform — leave as LF.
+*.py   text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.service text eol=lf

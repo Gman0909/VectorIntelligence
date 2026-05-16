@@ -1,0 +1,50 @@
+[
+  {
+    "name": "intent_imperative_come",
+    "keyphrases": [
+      "come to me",
+      "come here"
+    ],
+    "requiresexact": false
+  },
+  {
+    "name": "intent_system_charger",
+    "keyphrases": [
+      "go home",
+      "go to your charger",
+      "go to your home",
+      "find your charger",
+      "charger"
+    ],
+    "requiresexact": false
+  },
+  {
+    "name": "intent_system_sleep",
+    "keyphrases": [
+      "go to sleep",
+      "sleep",
+      "sheep",
+      "flee"
+    ],
+    "requiresexact": false
+  },
+  {
+    "name": "intent_imperative_dance",
+    "keyphrases": [
+      "do a dance",
+      "do a little dance",
+      "dance for me",
+      "show me your moves",
+      "show me a dance",
+      "bust a move"
+    ],
+    "requiresexact": false
+  },
+  {
+    "name": "intent_names_username_extend",
+    "keyphrases": [
+      "remember my face"
+    ],
+    "requiresexact": false
+  }
+]
