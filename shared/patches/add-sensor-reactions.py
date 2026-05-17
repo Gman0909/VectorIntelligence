@@ -32,6 +32,7 @@ import (
 \t"math/rand"
 \t"net/http"
 \t"sync"
+\t"sync/atomic"
 \t"time"
 
 \t"github.com/fforchino/vector-go-sdk/pkg/vector"
@@ -49,6 +50,15 @@ import (
 const sensorCooldownDuration = 20 * time.Second
 
 var sensorCooldowns sync.Map // key: "<esn>:<event>", value: time.Time
+
+// onChargerFlag tracks whether Vector is docked — updated live from the
+// robot_state stream in runSensorReactionLoop.
+var onChargerFlag atomic.Bool
+
+// IsOnCharger reports whether Vector is currently on his charging pod.
+func IsOnCharger() bool {
+\treturn onChargerFlag.Load()
+}
 
 var pickupPhrases = []string{
 \t"Whoah. A warning would have been nice.",
@@ -275,6 +285,7 @@ func runSensorReactionLoop(esn, guid, target string) {
 \t\t\tif rs == nil {
 \t\t\t\tcontinue
 \t\t\t}
+\t\t\tonChargerFlag.Store((rs.Status & uint32(vectorpb.RobotStatus_ROBOT_STATUS_IS_ON_CHARGER)) != 0)
 \t\t\tpickedUp := (rs.Status & uint32(vectorpb.RobotStatus_ROBOT_STATUS_IS_PICKED_UP)) != 0
 \t\t\ttouched := rs.TouchData != nil && rs.TouchData.GetIsBeingTouched()
 \t\t\tif !initialized {

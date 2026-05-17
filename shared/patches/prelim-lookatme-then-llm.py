@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
-"""Dispatch intent_imperative_lookatme to Vector via IntentPass BEFORE calling
-the LLM, on vision queries. Vector's firmware uses his still-fresh
-sound-direction cache to rapid-turn toward the user. After dispatch, the
-chipper voice stream is closed (IsFinal=true), but StreamingKGSim's
-subsequent speech goes through the SDK (robot.Conn.SayText) so the LLM
-response still reaches the user.
+"""Turn Vector to face the speaker before the LLM replies.
 
-Side note: StreamingKGSim's internal call to IntentPass(intent_greeting_hello)
-will fail to send (stream is closed), but the error is ignored and the
-SDK-based speech proceeds normally.
+On every LLM-bound voice query (not just vision ones), dispatch
+intent_imperative_lookatme via IntentPass BEFORE calling the LLM — Vector's
+firmware uses his still-fresh sound-direction cache to rapid-turn toward
+whoever just spoke. Skipped when he's on the charger, so he never drives
+off his pod (vision queries get a brief pause so he faces the user before
+describing the scene).
 
-Modifies preqs/intent_graph.go.
+Dispatching the intent closes the chipper voice stream (IsFinal=true), but
+StreamingKGSim's response goes through the SDK (robot.Conn.SayText), so the
+LLM answer still reaches the user. StreamingKGSim's own
+IntentPass(intent_greeting_hello) then fails silently on the closed
+stream — harmless.
 
-Idempotent.
+Requires ttr.IsOnCharger() — see add-sensor-reactions.py.
+
+Modifies preqs/intent_graph.go. Idempotent.
 """
 import re
 import sys
@@ -39,18 +43,21 @@ def patch(path: Path) -> bool:
         print(f"[prelim-lookatme] anchor not found in {path}", file=sys.stderr)
         sys.exit(1)
     insert = anchor + """
-\t// If the user asked a vision question and no built-in intent claimed it,
-\t// dispatch intent_imperative_lookatme NOW (before the LLM call). Vector's
-\t// firmware still has his fresh mic-direction cache from the just-finished
-\t// voice command and will rapid-turn toward the user — same mechanism as
-\t// intent_imperative_come. After this, the chipper voice stream closes,
-\t// but StreamingKGSim's subsequent response goes through the SDK
-\t// (robot.Conn.SayText) so the LLM answer still reaches the user.
-\tif !successMatched && looksLikeVisionQueryForPreDispatch(transcribedText) {
-\t\tfmt.Println("[prelim-lookatme] vision query detected — dispatching intent_imperative_lookatme")
+\t// Before the LLM replies, turn Vector to face whoever just spoke — his
+\t// firmware still has the fresh mic-direction cache from the just-finished
+\t// voice command and rapid-turns toward the user (same mechanism as
+\t// intent_imperative_come). Skipped when he's on the charger: he must not
+\t// drive off his pod. Dispatching the intent closes the chipper voice
+\t// stream, but StreamingKGSim's response goes through the SDK
+\t// (robot.Conn.SayText), so the LLM answer still reaches the user.
+\tif !successMatched && !ttr.IsOnCharger() {
+\t\tvisionQuery := looksLikeVisionQueryForPreDispatch(transcribedText)
+\t\tfmt.Println("[face-speaker] turning Vector to face the speaker")
 \t\tttr.IntentPass(req, "intent_imperative_lookatme", transcribedText, map[string]string{}, false)
-\t\t// Brief pause so Vector starts turning before the SDK speech kicks in.
-\t\ttime.Sleep(700 * time.Millisecond)
+\t\tif visionQuery {
+\t\t\t// Vision: pause so he faces the user before describing the scene.
+\t\t\ttime.Sleep(700 * time.Millisecond)
+\t\t}
 \t}
 """
     src = src.replace(anchor, insert, 1)

@@ -180,7 +180,7 @@ The installer patches Wire-Pod's source before building. Highlights:
 | `expand-animations.py` | +11 animations the LLM can use (fistBump, hello, dance, …) |
 | `wake-word-grace-period.py` / `-mute-during-getimage.py` | Vector's own speech/shutter doesn't self-interrupt |
 | `remove-photo-countdown.py` | photo capture is silent — no 3-2-1 theatrics |
-| `prelim-lookatme-then-llm.py` | on vision queries Vector rapid-turns to face you |
+| `prelim-lookatme-then-llm.py` | Vector rapid-turns to face whoever spoke to him before replying — every query, unless he's on the charger |
 | `slow-tts.py` | TTS cadence tuned for intelligibility |
 | `add-eye-color-cmd.py` | LLM can shift Vector's eye colour to match mood |
 | `add-sensor-reactions.py` | in-character reactions to pickup / putdown / pets |
