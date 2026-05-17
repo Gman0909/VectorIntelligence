@@ -186,6 +186,8 @@ The installer patches Wire-Pod's source before building. Highlights:
 | `add-sensor-reactions.py` | in-character reactions to pickup / putdown / pets |
 | `add-button-interrupt.py` | the back button stops Vector mid-sentence |
 | `add-ondemand-face.py` | Vector identifies who he's talking to (for per-face memory) only during a conversation — never a 24/7 face-detection stream |
+| `add-face-probe.py` | a face check runs concurrently with speech-to-text, so Vector knows the current speaker before he replies — no one-turn lag |
+| `fix-name-extraction.py` | face enrollment parses just the name ("Sarah"), not the whole spoken sentence |
 | `fix-connection-leak.py` + patched `vector-go-sdk` | adds a `Close()` so every voice query releases its gRPC connection to Vector — without it the robot's SDK wedges after a few questions |
 | minimal `en-US.json` | only come-here / charger / sleep / dance / "remember my face" stay as built-in intents — everything else goes to the LLM |
 

@@ -56,7 +56,11 @@ MEMORY = MemoryStore(Path(__file__).parent / "memory.db")
 # stranger blip must not wipe a recent confident recognition (which would
 # drop all of that person's memories from the LLM's context).
 import time as _time
-FACE_RECENT_WINDOW = 90  # seconds — how long a sighting stays "current"
+FACE_RECENT_WINDOW = 40  # seconds — how long a sighting stays "current".
+                         # Short, because the face probe (ObserveFaceBriefly)
+                         # re-checks who's present at the start of every voice
+                         # request; this window only bridges a turn where the
+                         # probe saw nobody (user not facing Vector).
 
 _face_state = {
     "enrolled_id":   None,  # last enrolled (named) face_id

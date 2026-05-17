@@ -144,6 +144,9 @@ sudo python3 "$SHARED_DIR/patches/fix-connection-leak.py" "$WIREPOD_DIR/chipper/
 info "Fixing name parsing so face enrollment captures just the name..."
 sudo python3 "$SHARED_DIR/patches/fix-name-extraction.py" "$WIREPOD_DIR/chipper/pkg/wirepod/ttr/intentparam.go"
 
+info "Adding the concurrent face probe (knows the speaker before the LLM replies)..."
+sudo python3 "$SHARED_DIR/patches/add-face-probe.py" "$WIREPOD_DIR"
+
 # Patched vector-go-sdk: upstream opens a gRPC connection per vector.New()
 # but never closes it, so every voice query leaks one until the robot's SDK
 # wedges. Pull the pinned SDK commit into chipper/third_party, patch in a
