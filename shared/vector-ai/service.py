@@ -434,7 +434,9 @@ _WAKING_PHRASES = [
 # Every entry is a SINGLE sentence: ollama_sentence_stream yields one sentence
 # per chunk on purpose, and a multi-sentence filler chunk risks Wire-Pod's
 # parser dropping the tail. Keep new entries to one sentence.
-THINKING_DELAY = 1.0  # seconds to wait for the first sentence before filling
+THINKING_DELAY = 1.5  # seconds to wait for the first sentence before filling
+                      # (a warm gemma3:12b first sentence lands ~1.1s, so 1.5
+                      # clears normal replies and only masks genuinely slow ones)
 
 _THINKING_PHRASES = [
     "Hmm, let me think.",
