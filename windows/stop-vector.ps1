@@ -20,7 +20,7 @@ Get-Process | Where-Object { $_.ProcessName -like 'python*' } | ForEach-Object {
     }
 }
 # Ensure the model is unloaded so VRAM is freed.
-try { & ollama stop gemma4:e4b 2>$null | Out-Null } catch {}
+try { & ollama stop gemma3:12b 2>$null | Out-Null } catch {}
 
 Info "Stopped. VRAM freed."
 Write-Host "Ollama itself is left running (idle, no model loaded). Start again with start-vector.ps1."

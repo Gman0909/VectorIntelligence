@@ -486,7 +486,7 @@ class Supervisor:
         # Free VRAM: tell Ollama to unload the model (model auto-unload is
         # intentionally kept — we just make it immediate on shutdown).
         try:
-            subprocess.run(["ollama", "stop", "gemma4:e4b"],
+            subprocess.run(["ollama", "stop", "gemma3:12b"],
                            capture_output=True, timeout=10)
         except Exception:
             pass

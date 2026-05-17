@@ -4,7 +4,7 @@
 #   - Go, Python, Git, MSYS2 (mingw, for cgo), Ollama via winget
 #   - Wire-Pod (cloned from upstream, our patches applied, built locally)
 #   - vector-ai Python service (FastAPI proxy)
-#   - gemma4:e4b model
+#   - gemma3:12b model
 #   - Windows Firewall rules and Scheduled Tasks for daily start/stop
 #
 # Run from an elevated (admin) PowerShell:  .\install.ps1
@@ -454,8 +454,8 @@ Info "Scheduled task VectorPod-Supervisor registered (S4U, hidden, manual-start 
 
 # ── 8. Pull model ─────────────────────────────────────────────────────────────
 Step "Model"
-Info "Pulling gemma4:e4b (downloads ~3-10 GB the first time)..."
-& ollama pull gemma4:e4b
+Info "Pulling gemma3:12b (downloads ~3-10 GB the first time)..."
+& ollama pull gemma3:12b
 
 # ── 9. Done ───────────────────────────────────────────────────────────────────
 Step "Installation complete"

@@ -37,7 +37,7 @@ app = FastAPI()
 # Defaults assume Ollama runs on the same machine (the supervisor starts it
 # locally). vector-ai/.env can override both for a split-host setup.
 OLLAMA_BASE = os.getenv("OLLAMA_BASE", "http://127.0.0.1:11434")
-MODEL       = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
+MODEL       = os.getenv("OLLAMA_MODEL", "gemma3:12b")
 
 # Persistent memory: SQLite next to service.py so it lives wherever vector-ai
 # is installed. Survives restarts and updates.

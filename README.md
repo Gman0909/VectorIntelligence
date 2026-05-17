@@ -9,7 +9,7 @@ Everything runs on one machine — no cloud, no subscription.
    wake word,       │                                          │
    voice, camera    │   ├─ chipper      :443   Wire-Pod — voice │
                     │   ├─ vector-ai    :8000  LLM glue + memory│
-                    │   ├─ Ollama       :11434 gemma4:e4b       │
+                    │   ├─ Ollama       :11434 gemma3:12b       │
                     │   └─ mDNS                escapepod.local  │
                     │                                          │
                     │   monitors all of the above, and         │
@@ -55,7 +55,7 @@ VectorDeploy/
 
 ## Hardware requirements
 
-- **GPU**: ~10 GB VRAM free for `gemma4:e4b` (tested on RTX 4080 Super)
+- **GPU**: ~8 GB VRAM free for `gemma3:12b` (tested on RTX 4080 Super)
 - **Disk**: ~18 GB free (Wire-Pod + Whisper.cpp build, Ollama + Whisper models)
 - **OS**: Windows 10/11 x64, or Debian/Ubuntu/Mint x64 / ARM64
 - **Network**: Vector and the host on the **same LAN**, ideally good 2.4GHz
@@ -75,7 +75,7 @@ VectorDeploy/
    Ollama — then clones and builds Wire-Pod (VOSK + Whisper chipper builds),
    builds whisper.cpp, sets up the `vector-ai` venv, registers the single
    **VectorPod-Supervisor** scheduled task, opens the firewall (443/8080/80/8084),
-   and pulls `gemma4:e4b`. First run: 15–25 minutes, mostly downloads.
+   and pulls `gemma3:12b`. First run: 15–25 minutes, mostly downloads.
 
 2. **Bring the stack up:** double-click `windows\start-vector.cmd`.
 
@@ -145,9 +145,9 @@ accuracy at ~1.5s/utterance).
 
 ## The LLM
 
-Default is **`gemma4:e4b`** (Google Gemma 4, edge MoE — fast, multimodal).
-`OLLAMA_MODEL` in `vector-ai/.env` selects it. The model auto-unloads after
-idle to free VRAM and reloads on the next query.
+Default is **`gemma3:12b`** (Google Gemma 3 — dense, multimodal, consistent
+first-token latency). `OLLAMA_MODEL` in `vector-ai/.env` selects it. The model
+auto-unloads after idle to free VRAM and reloads on the next query.
 
 ## What the patches do
 

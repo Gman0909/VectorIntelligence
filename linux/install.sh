@@ -71,8 +71,8 @@ else
     info "Ollama already installed."
 fi
 
-info "Ensuring gemma4:e4b is present (this may take a few minutes the first time)..."
-ollama pull gemma4:e4b
+info "Ensuring gemma3:12b is present (this may take a few minutes the first time)..."
+ollama pull gemma3:12b
 
 # ── 4. Wire-Pod ───────────────────────────────────────────────────────────────
 step "Wire-Pod"
