@@ -511,6 +511,9 @@ async def ollama_sentence_stream(messages: list, temperature: float = 1.0) -> As
     same high-probability tokens turn after turn (especially noticeable on
     'tell me a joke')."""
     buffer = ""
+    t0 = time.monotonic()
+    first_token_seen = False
+    first_sentence_seen = False
     async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, read=120.0)) as client:
         async with client.stream(
             "POST",
@@ -537,6 +540,9 @@ async def ollama_sentence_stream(messages: list, temperature: float = 1.0) -> As
                     continue
                 if not delta:
                     continue
+                if not first_token_seen:
+                    print(f"[vector-ai] timing: Ollama first token {time.monotonic() - t0:.2f}s")
+                    first_token_seen = True
                 buffer += delta
                 while True:
                     match = _SENTENCE_END.search(buffer)
@@ -545,6 +551,9 @@ async def ollama_sentence_stream(messages: list, temperature: float = 1.0) -> As
                     sentence = buffer[:match.end()].strip()
                     buffer = buffer[match.end():]
                     if sentence:
+                        if not first_sentence_seen:
+                            print(f"[vector-ai] timing: Ollama first sentence {time.monotonic() - t0:.2f}s")
+                            first_sentence_seen = True
                         yield sentence
     # Flush any trailing content that didn't end in punctuation (often a
     # trailing {{getImage||front}} or animation command).
@@ -610,7 +619,7 @@ async def generate(messages: List[Message], temperature: float = 1.0) -> AsyncIt
         "",
     )
     has_image = bool(messages) and isinstance(messages[-1].content, list)
-    print(f"[vector-ai] User: {last_user_text!r} (image: {has_image})")
+    print(f"[{datetime.now():%H:%M:%S}] [vector-ai] User: {last_user_text!r} (image: {has_image})")
 
     # Vision-intent backstop: if the user is clearly asking to look at something
     # and no photo is attached yet, force the camera command rather than letting
@@ -624,6 +633,7 @@ async def generate(messages: List[Message], temperature: float = 1.0) -> AsyncIt
         return
 
     try:
+        t_req = time.monotonic()
         prepared = prepare_messages(messages)
 
         # Cold-model mask: if the model unloaded during idle, speak a short
@@ -677,6 +687,8 @@ async def generate(messages: List[Message], temperature: float = 1.0) -> AsyncIt
                 yield sse_chunk(cleaned)
                 any_emitted = True
 
+        print(f"[vector-ai] timing: full response {time.monotonic() - t_req:.2f}s "
+              f"(cold_model={cold_model})")
         if not any_emitted:
             yield sse_chunk("Hmm.")
         yield sse_chunk("", finish="stop")
