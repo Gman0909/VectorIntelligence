@@ -63,16 +63,50 @@ def log(msg: str):
 
 # ── Small helpers ─────────────────────────────────────────────────────────────
 
-def local_ip() -> str:
-    """This machine's LAN IP (the interface that routes to the LAN)."""
+_last_good_ip = None  # remembered so a post-wake detection failure can't
+                      # silently downgrade mDNS to loopback
+
+
+def _detect_local_ip():
+    """Best-effort LAN IP via the UDP-connect trick. Returns None when no
+    real (non-loopback) address is available — typically because the network
+    interface hasn't come up yet, e.g. in the seconds after wake-from-sleep."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("10.255.255.255", 1))
-        return s.getsockname()[0]
+        ip = s.getsockname()[0]
     except OSError:
-        return "127.0.0.1"
+        return None
     finally:
         s.close()
+    if not ip or ip == "0.0.0.0" or ip.startswith("127."):
+        return None
+    return ip
+
+
+def local_ip(wait: float = 0.0) -> str:
+    """This machine's LAN IP (the interface that routes to the LAN).
+
+    Polls for up to `wait` seconds for a real address — the network is often
+    not ready for a second or two after wake-from-sleep, and advertising
+    loopback over mDNS points Vector at itself (the classic "responds once
+    then dead" failure). Falls back to the last known-good IP, and only as a
+    true last resort to loopback."""
+    global _last_good_ip
+    deadline = time.monotonic() + wait
+    while True:
+        ip = _detect_local_ip()
+        if ip:
+            _last_good_ip = ip
+            return ip
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(1)
+    if _last_good_ip:
+        log(f"local_ip: network not ready — using last known-good {_last_good_ip}")
+        return _last_good_ip
+    log("local_ip: no LAN IP available and no known-good fallback — using loopback")
+    return "127.0.0.1"
 
 
 def http_ok(url: str, timeout: float = 4.0) -> bool:
@@ -205,7 +239,8 @@ class MDNS:
 
     def start(self):
         from zeroconf import IPVersion, ServiceInfo, Zeroconf
-        ip = local_ip()
+        # wait: tolerate a network interface that is still coming up (post-wake).
+        ip = local_ip(wait=30)
         self.zc = Zeroconf(ip_version=IPVersion.V4Only)
         self.info = ServiceInfo(
             type_="_app-proto._tcp.local.",
@@ -487,6 +522,11 @@ class Supervisor:
             # means the PC was suspended. Refresh everything network-facing.
             if gap > SLEEP_GAP:
                 log(f"wake-from-sleep detected (tick gap {int(gap)}s) — refreshing")
+                # The network interface is usually not up yet right after
+                # wake. Block until a real LAN IP is available (up to 60s)
+                # before re-advertising — otherwise mDNS publishes loopback
+                # and Vector tries to reach the server on itself.
+                log(f"wake-from-sleep: waiting for network, LAN IP {local_ip(wait=60)}")
                 self.mdns.refresh()
                 vip = read_vector_ip()
                 if vip:
