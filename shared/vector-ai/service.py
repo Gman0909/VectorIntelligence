@@ -1275,8 +1275,17 @@ _AMBIENT_SYSTEM = (
     "lines:\n"
     "Line 1: a brief, plain, factual note of what is new, for your own memory "
     "(e.g. 'a small plush toy has appeared on the desk').\n"
-    "Line 2: a short spoken reaction in your own voice — under 20 words, "
-    "plain text, no markdown, no quotes, no {{...}} tokens.\n"
+    "Line 2: your spoken reaction — and make it genuinely sound like "
+    "noticing something. In your own words and your own dry voice, let it "
+    "move through three beats: first a flicker of real surprise that "
+    "something has caught your attention; then what the thing actually is, "
+    "named or briefly described as it registers with you; then your "
+    "characteristic wry remark about it. Someone who cannot see your desk "
+    "must still come away knowing what you spotted. This is the natural "
+    "shape of noticing something, NOT a template — never reuse a stock "
+    "opening or fixed wording; the surprise, the phrasing and the wit must "
+    "be freshly and genuinely yours every time. Plain text, no markdown, no "
+    "quotes, no {{...}} tokens; one to three short sentences.\n"
     "Otherwise respond with exactly: NOTHING"
 )
 
@@ -1343,7 +1352,7 @@ async def ambient(req: AmbientRequest):
                         {"role": "user",   "content": user_msg},
                     ],
                     "stream":      False,
-                    "temperature": 0.6,
+                    "temperature": 0.8,
                     "top_p":       0.9,
                     "seed":        random.randint(1, 2**31 - 1),
                 },
@@ -1362,7 +1371,10 @@ async def ambient(req: AmbientRequest):
 
     lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
     if len(lines) >= 2:
-        note, spoken = lines[0], lines[1]
+        # Line 1 is the terse memory note; the rest is the spoken reaction
+        # (joined, so a reaction that ran onto extra lines isn't truncated).
+        note   = lines[0]
+        spoken = " ".join(lines[1:])
     else:
         # Model didn't follow the two-line format — use the single line both
         # as the memory note and the spoken reaction.
