@@ -91,6 +91,15 @@ class MemoryStore:
                     text    TEXT NOT NULL
                 )
             """)
+            # Generic key/value state — currently holds Vector's persistent
+            # mood (Phase 2 continuity) so his disposition survives restarts.
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS state (
+                    key        TEXT PRIMARY KEY,
+                    value      TEXT,
+                    updated_at REAL
+                )
+            """)
 
     def remember(
         self,
@@ -308,6 +317,36 @@ class MemoryStore:
                 "WHERE seen_at >= ? ORDER BY id DESC LIMIT ?", (cutoff, limit),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── Persistent state (key/value) ──────────────────────────────────────────
+
+    def get_state(self, key: str) -> Optional[dict]:
+        with self._lock, self._conn() as c:
+            row = c.execute(
+                "SELECT value, updated_at FROM state WHERE key = ?", (key,),
+            ).fetchone()
+        return {"value": row["value"], "updated_at": row["updated_at"]} if row else None
+
+    def set_state(self, key: str, value: str) -> None:
+        now = datetime.now().timestamp()
+        with self._lock, self._conn() as c:
+            c.execute(
+                "INSERT INTO state (key, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET "
+                "value = excluded.value, updated_at = excluded.updated_at",
+                (key, value, now),
+            )
+
+    def latest_conversation(self) -> Optional[dict]:
+        """The most recent conversation across all faces — feeds mood
+        reflection (how long since Vector last spoke with someone, about what)."""
+        with self._lock, self._conn() as c:
+            row = c.execute(
+                "SELECT face_name, last_convo_summary, last_convo_at "
+                "FROM face_meta WHERE last_convo_at IS NOT NULL "
+                "ORDER BY last_convo_at DESC LIMIT 1"
+            ).fetchone()
+        return dict(row) if row else None
 
     def clear(self) -> int:
         with self._lock, self._conn() as c:

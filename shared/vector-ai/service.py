@@ -135,6 +135,120 @@ def _set_quiet(on: bool) -> None:
         print("[ambient] quiet mode OFF — spontaneous reactions resume")
 
 
+# ── Continuity: a persistent mood (Phase 2) ───────────────────────────────────
+# Vector carries a thread of inner state across time. A cheap background
+# reflection distils "the day so far" into a one-line mood; it is persisted so
+# it survives restarts, and it colours both conversation and ambient reactions.
+# The mood only ever TINTS tone — it is never announced.
+
+MOOD_REFLECT_INTERVAL = 30 * 60  # seconds between background mood reflections
+
+_mood_state = {
+    "text":    "",   # current one-line mood
+    "updated": 0.0,  # unix ts of the last reflection
+}
+
+
+def _load_mood() -> None:
+    """Restore the last persisted mood at startup — continuity across restarts."""
+    rec = MEMORY.get_state("mood")
+    if rec and rec.get("value"):
+        _mood_state["text"]    = rec["value"]
+        _mood_state["updated"] = rec.get("updated_at") or 0.0
+        print(f"[mood] restored: {_mood_state['text']!r}")
+
+
+_MOOD_SYSTEM = (
+    "You track the inner state of Vector, a small desktop robot with a dry, "
+    "sardonic character — somewhere between Marvin from Hitchhiker's Guide, "
+    "Bender from Futurama, and Stephen Fry. Given a short digest of how his "
+    "day has gone, reply with his CURRENT state of mind as ONE short phrase: "
+    "third person, lowercase, no final period, a mood rather than a list of "
+    "events (e.g. 'restless after a long quiet stretch', or 'quietly content "
+    "after a sociable evening'). Plain text only, under 12 words."
+)
+
+
+async def _reflect_mood() -> None:
+    """Distil the day so far into a one-line mood and persist it. Runs on the
+    small CPU model, so it never touches the main model's VRAM or prompt cache."""
+    now_dt = datetime.now()
+    bits = [
+        f"It is {now_dt.strftime('%A')} {_time_of_day(now_dt)}, "
+        f"{now_dt.strftime('%I:%M %p')}."
+    ]
+    obs = MEMORY.list_observations(limit=6, max_age_seconds=12 * 3600)
+    if obs:
+        bits.append("Things he has noticed recently: "
+                    + "; ".join(o["text"] for o in reversed(obs)) + ".")
+    else:
+        bits.append("He has noticed nothing new for a good while — "
+                    "a static, uneventful stretch.")
+    convo = MEMORY.latest_conversation()
+    if convo and convo.get("last_convo_at"):
+        gap = now_dt.timestamp() - convo["last_convo_at"]
+        line = f"His last conversation was {_relative_time(gap)}"
+        if convo.get("last_convo_summary"):
+            line += f", about: {convo['last_convo_summary']}"
+        bits.append(line + ".")
+    else:
+        bits.append("He has not had a real conversation in a long time.")
+    if _ambient_state["quiet"]:
+        bits.append("He has been asked to stay quiet.")
+    if _mood_state["text"]:
+        bits.append(f"A little while ago his mood was: {_mood_state['text']}.")
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+            r = await client.post(
+                f"{OLLAMA_BASE}/api/chat",
+                json={"model": SUMMARY_MODEL,
+                      "messages": [
+                          {"role": "system", "content": _MOOD_SYSTEM},
+                          {"role": "user",   "content": " ".join(bits)},
+                      ],
+                      "stream": False,
+                      "options": {"num_gpu": 0, "temperature": 0.7}},
+            )
+            r.raise_for_status()
+            mood = r.json().get("message", {}).get("content", "")
+        mood = strip_markdown(mood).strip().strip('"').strip().rstrip(".").strip()
+        if mood:
+            _mood_state["text"]    = mood
+            _mood_state["updated"] = datetime.now().timestamp()
+            MEMORY.set_state("mood", mood)
+            print(f"[mood] -> {mood!r}")
+    except Exception as e:
+        print(f"[mood] reflection failed: {e}")
+
+
+async def _mood_loop() -> None:
+    await asyncio.sleep(60)  # let the stack settle before the first reflection
+    while True:
+        await _reflect_mood()
+        await asyncio.sleep(MOOD_REFLECT_INTERVAL)
+
+
+@app.on_event("startup")
+async def _start_mood_loop() -> None:
+    asyncio.create_task(_mood_loop())
+
+
+@app.get("/v1/mood")
+async def mood_get():
+    return dict(_mood_state)
+
+
+@app.post("/v1/mood/reflect")
+async def mood_reflect():
+    """Force a mood reflection now (ops/testing)."""
+    await _reflect_mood()
+    return dict(_mood_state)
+
+
+_load_mood()
+
+
 class Message(BaseModel):
     role: str
     content: str | list | None = ""
@@ -386,6 +500,12 @@ def _build_context_note(face: Optional[dict], prior: Optional[dict],
                     )
     elif face and face.get("is_stranger"):
         bits.append("You don't recognise the person in front of you.")
+
+    if _mood_state["text"]:
+        bits.append(
+            f"Your current state of mind: {_mood_state['text']}. Let it colour "
+            f"your tone naturally — never state, explain or announce it."
+        )
 
     return ("[Context for you, Vector — " + " ".join(bits)
             + " Weave in only what naturally fits; never recite this back.]")
@@ -826,6 +946,8 @@ async def _summarise_conversation(messages: List[Message], latest_reply: str,
         if summary:
             MEMORY.set_convo_summary(face_id, summary)
             print(f"[memory] convo summary [{face_name}]: {summary!r}")
+            # A finished conversation is a notable event — refresh the mood.
+            asyncio.create_task(_reflect_mood())
     except Exception as e:
         print(f"[memory] summary failed: {e}")
 
@@ -1197,11 +1319,15 @@ async def ambient(req: AmbientRequest):
     else:
         obs_note = "You have not noted anything recently."
 
+    mood_note = ""
+    if _mood_state["text"]:
+        mood_note = (f"\n\nYour current state of mind: {_mood_state['text']}. "
+                     f"If you do react, let it tint your tone; never state it.")
     user_msg = [
         {"type": "text", "text":
-            obs_note + "\n\nGlance at what is in front of you now. Is there "
-            "genuine novelty worth a reaction? Reply with NOTHING, or the "
-            "two-line format."},
+            obs_note + mood_note + "\n\nGlance at what is in front of you now. "
+            "Is there genuine novelty worth a reaction? Reply with NOTHING, or "
+            "the two-line format."},
         {"type": "image_url",
          "image_url": {"url": f"data:image/jpeg;base64,{req.image}"}},
     ]
