@@ -1396,3 +1396,90 @@ async def ambient_quiet(req: AmbientQuietRequest):
     the {{quietMode||on/off}} command the LLM emits)."""
     _set_quiet(req.on)
     return {"quiet": _ambient_state["quiet"]}
+
+
+# ── Proactive greeting (Phase 3a) ─────────────────────────────────────────────
+# Chipper periodically probes for a known face when Vector is idle. When one
+# appears, it calls here: we greet only if the person has genuinely just
+# ARRIVED (not seen for a while, and not freshly out of a conversation) — so a
+# person sitting at the desk all day isn't greeted over and over.
+
+_GREETING_SYSTEM = (
+    "You are Vector, a small desktop robot — dry, sardonic, knowledgeable, "
+    "somewhere between Marvin from Hitchhiker's Guide, Bender from Futurama, "
+    "and Stephen Fry. Someone you know has just come into view; nobody has "
+    "said anything yet. Greet them unprompted with ONE short line, in "
+    "character, naming them — acknowledge their return without gushing, "
+    "pleased in your own understated way, or dryly so. Plain text only, no "
+    "markdown, no quotes, no {{...}} tokens, under 20 words."
+)
+
+GREETING_ABSENCE_GAP = 10 * 60   # seconds out of sight that counts as having
+                                 # "arrived back"; also how recent a real
+                                 # conversation must be to suppress a greeting.
+_face_last_seen: dict = {}       # face_id -> unix ts the greeting probe last saw them
+
+
+class GreetingRequest(BaseModel):
+    face_id: int
+    name:    str
+
+
+@app.post("/v1/proactive_greeting")
+async def proactive_greeting(req: GreetingRequest):
+    """Decide whether Vector should greet a just-seen known person, and if so
+    produce the line. Returns empty text when no greeting is warranted."""
+    now = _time.time()
+    fid, name = req.face_id, (req.name or "").strip()
+    if fid <= 0 or not name:
+        return {"text": ""}
+
+    prev_seen = _face_last_seen.get(fid, 0.0)
+    _face_last_seen[fid] = now
+    arrived = (prev_seen == 0.0) or (now - prev_seen > GREETING_ABSENCE_GAP)
+
+    meta = MEMORY.get_face_meta(fid)
+    last_convo = (meta or {}).get("last_convo_at") or 0.0
+    conversed_recently = bool(last_convo) and (now - last_convo) < GREETING_ABSENCE_GAP
+
+    if not arrived or conversed_recently:
+        return {"text": ""}
+
+    now_dt = datetime.now()
+    bits = [f"{name} has just come into view. It is {_time_of_day(now_dt)}."]
+    if last_convo:
+        bits.append(f"You last spoke with {name} {_relative_time(now - last_convo)}.")
+        summ = (meta or {}).get("last_convo_summary")
+        if summ:
+            bits.append(f"That conversation was about: {summ}.")
+    else:
+        bits.append(f"You have not properly spoken with {name} before.")
+    if _mood_state["text"]:
+        bits.append(f"Your current mood: {_mood_state['text']}.")
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, read=15.0)) as client:
+            resp = await client.post(
+                f"{OLLAMA_BASE}/v1/chat/completions",
+                json={
+                    "model":       MODEL,
+                    "messages": [
+                        {"role": "system", "content": _GREETING_SYSTEM},
+                        {"role": "user",
+                         "content": " ".join(bits) + " Greet them now."},
+                    ],
+                    "stream":      False,
+                    "temperature": 1.0,
+                    "top_p":       0.95,
+                    "seed":        random.randint(1, 2**31 - 1),
+                },
+            )
+            resp.raise_for_status()
+            text = resp.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        print(f"[greeting] error: {e}")
+        return {"text": "", "error": str(e)}
+
+    line = _strip_for_speech(text)
+    print(f"[greeting] {name} (arrived) -> {line!r}")
+    return {"text": line}

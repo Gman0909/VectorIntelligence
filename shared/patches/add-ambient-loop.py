@@ -60,7 +60,7 @@ const (
 \t// novelty, so this is the latency to NOTICE a change, not how often he
 \t// talks. Longer = calmer and less GPU churn (each glance is a vision call
 \t// that keeps the model warm in VRAM).
-\tambientInterval = 5 * time.Minute
+\tambientInterval = 3 * time.Minute
 
 \t// After Vector reacts to something, stay silent at least this long before
 \t// reacting to anything again.
@@ -76,6 +76,11 @@ const (
 \t// Tune these to match when Vector actually sleeps.
 \tambientNightStart = 23 // 11pm
 \tambientNightEnd   = 7  // 7am
+
+\t// How often, when idle, Vector briefly probes for a known face to greet.
+\t// Each probe opens a short face-event stream, which is heavy on Vector's
+\t// firmware — so keep these windows brief and infrequent.
+\tgreetingInterval = 2 * time.Minute
 )
 
 // lastVoiceActivity is the unix time of the most recent voice interaction,
@@ -109,12 +114,13 @@ func ambientReactionOnCooldown() bool {
 \treturn last != 0 && time.Now().Unix()-last < int64(ambientReactCooldown/time.Second)
 }
 
-// StartAmbientLoop launches the ambient observation loop per enrolled robot.
-// Call once at chipper startup.
+// StartAmbientLoop launches the ambient observation and proactive-greeting
+// loops per enrolled robot. Call once at chipper startup.
 func StartAmbientLoop() {
 \ttime.Sleep(30 * time.Second) // let chipper finish init and bots load
 \tfor _, bot := range vars.BotInfo.Robots {
 \t\tgo runAmbientLoop(bot.Esn, bot.GUID, bot.IPAddress+":443")
+\t\tgo runGreetingLoop(bot.Esn, bot.GUID, bot.IPAddress+":443")
 \t}
 }
 
@@ -214,15 +220,17 @@ func ambientObserveOnce(esn, guid, target string) {
 
 \tfmt.Printf("[ambient] reaction: %q\\n", line)
 \tlastAmbientReaction.Store(time.Now().Unix())
-\tambientSpeak(robot, line)
+\t// Off the charger, Vector physically investigates the new thing before
+\t// commenting; docked, he simply speaks (we never drive him off his pod).
+\tambientReact(robot, line, !IsOnCharger())
 }
 
-// ambientSpeak makes Vector say a line synchronously: it acquires behavior
-// control, waits for the grant, speaks, and releases — all before returning,
-// so the caller's deferred Close never cuts the speech off mid-sentence. The
-// shared fire-and-forget sayText helper is unsafe here: the ambient loop's
-// connection is short-lived and closing it would race the speech.
-func ambientSpeak(robot *vector.Vector, text string) {
+// ambientReact makes Vector react to something synchronously: it acquires
+// behavior control, optionally performs a brief investigative move, speaks the
+// line, then releases — all before returning, so the caller's deferred Close
+// never cuts the moment off. The shared fire-and-forget sayText helper is
+// unsafe here: the ambient loop's connection is short-lived.
+func ambientReact(robot *vector.Vector, text string, investigate bool) {
 \tctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 \tdefer cancel()
 \tbc, err := robot.Conn.BehaviorControl(ctx)
@@ -250,6 +258,9 @@ func ambientSpeak(robot *vector.Vector, text string) {
 \t\t\tbreak
 \t\t}
 \t}
+\tif investigate {
+\t\tambientInvestigateMove(ctx, robot)
+\t}
 \tif _, err := robot.Conn.SayText(ctx, &vectorpb.SayTextRequest{
 \t\tText:           text,
 \t\tUseVectorVoice: true,
@@ -263,6 +274,109 @@ func ambientSpeak(robot *vector.Vector, text string) {
 \t\t\tControlRelease: &vectorpb.ControlRelease{},
 \t\t},
 \t})
+}
+
+// ambientInvestigateMove is a brief, modest "I noticed something" beat — a
+// curious tilt of the head and a short approach toward what Vector saw. It is
+// deliberately small, not navigation. Behavior control must already be held,
+// and Vector must be off the charger.
+func ambientInvestigateMove(ctx context.Context, robot *vector.Vector) {
+\trobot.Conn.SetHeadAngle(ctx, &vectorpb.SetHeadAngleRequest{
+\t\tAngleRad:          0.30,
+\t\tMaxSpeedRadPerSec: 2.0,
+\t\tAccelRadPerSec2:   10.0,
+\t\tDurationSec:       0.4,
+\t})
+\trobot.Conn.DriveStraight(ctx, &vectorpb.DriveStraightRequest{
+\t\tSpeedMmps:           50,
+\t\tDistMm:              35,
+\t\tShouldPlayAnimation: true,
+\t})
+}
+
+// runGreetingLoop periodically, when Vector is idle, briefly probes for a known
+// face. If someone he knows has come into view, vector-ai decides whether a
+// greeting is warranted (it won't greet someone seen recently); if so, Vector
+// says it unprompted.
+func runGreetingLoop(esn, guid, target string) {
+\tfmt.Printf("[greeting] starting proactive-greeting loop for %s\\n", esn)
+\tfor {
+\t\ttime.Sleep(greetingInterval)
+\t\tif recentlyConversed() || ambientInNightHours() {
+\t\t\tcontinue
+\t\t}
+\t\trobot, err := vector.New(vector.WithSerialNo(esn), vector.WithToken(guid), vector.WithTarget(target))
+\t\tif err != nil {
+\t\t\tfmt.Printf("[greeting] connect failed for %s: %v\\n", esn, err)
+\t\t\tcontinue
+\t\t}
+\t\tfaceID, name := probeForKnownFace(robot)
+\t\tif faceID <= 0 {
+\t\t\trobot.Close()
+\t\t\tcontinue
+\t\t}
+\t\tline := askVectorAIGreeting(faceID, name)
+\t\tif line == "" || recentlyConversed() {
+\t\t\trobot.Close()
+\t\t\tcontinue
+\t\t}
+\t\tfmt.Printf("[greeting] %s -> %q\\n", name, line)
+\t\tMarkVoiceActivity() // a greeting counts as an interaction — keep loops clear
+\t\tambientReact(robot, line, false)
+\t\trobot.Close()
+\t}
+}
+
+// probeForKnownFace opens a short robot_observed_face stream and returns the
+// first enrolled (named) face Vector sees, or (0, "") if none. That stream is
+// firmware-heavy, so the window is deliberately brief.
+func probeForKnownFace(robot *vector.Vector) (int32, string) {
+\tctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+\tdefer cancel()
+\tstrm, err := robot.Conn.EventStream(ctx, &vectorpb.EventRequest{
+\t\tListType: &vectorpb.EventRequest_WhiteList{
+\t\t\tWhiteList: &vectorpb.FilterList{List: []string{"robot_observed_face"}},
+\t\t},
+\t})
+\tif err != nil {
+\t\treturn 0, ""
+\t}
+\tfor {
+\t\tresp, err := strm.Recv()
+\t\tif err != nil {
+\t\t\treturn 0, ""
+\t\t}
+\t\tif rof := resp.Event.GetRobotObservedFace(); rof != nil {
+\t\t\tif rof.GetFaceId() > 0 && rof.GetName() != "" {
+\t\t\t\treturn rof.GetFaceId(), rof.GetName()
+\t\t\t}
+\t\t}
+\t}
+}
+
+// askVectorAIGreeting asks vector-ai whether to greet this person and for the
+// line. Empty string means "do not greet" (e.g. they were seen recently).
+func askVectorAIGreeting(faceID int32, name string) string {
+\tpayload, _ := json.Marshal(map[string]interface{}{
+\t\t"face_id": faceID,
+\t\t"name":    name,
+\t})
+\tclient := &http.Client{Timeout: 20 * time.Second}
+\tresp, err := client.Post("http://127.0.0.1:8000/v1/proactive_greeting", "application/json", bytes.NewReader(payload))
+\tif err != nil {
+\t\tfmt.Printf("[greeting] vector-ai call failed: %v\\n", err)
+\t\treturn ""
+\t}
+\tdefer resp.Body.Close()
+\tvar result struct {
+\t\tText  string `json:"text"`
+\t\tError string `json:"error,omitempty"`
+\t}
+\tif err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+\t\tfmt.Printf("[greeting] vector-ai bad json: %v\\n", err)
+\t\treturn ""
+\t}
+\treturn result.Text
 }
 '''
 
