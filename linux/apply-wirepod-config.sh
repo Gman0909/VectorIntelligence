@@ -27,17 +27,17 @@ fi
 python3 - <<PYEOF
 import json, sys
 
-with open("$CONFIG_SRC") as f:
+with open("$CONFIG_SRC", encoding="utf-8") as f:
     our = json.load(f)
-with open("$CONFIG_DST") as f:
+with open("$CONFIG_DST", encoding="utf-8") as f:
     live = json.load(f)
 
 # Apply our sections; preserve anything Wire-Pod manages itself
 for key in ("knowledge", "STT", "weather"):
     live[key] = our[key]
 
-with open("$CONFIG_DST", "w") as f:
-    json.dump(live, f, indent=2)
+with open("$CONFIG_DST", "w", encoding="utf-8") as f:
+    json.dump(live, f, indent=2, ensure_ascii=False)
 
 print("Config merged OK.")
 PYEOF

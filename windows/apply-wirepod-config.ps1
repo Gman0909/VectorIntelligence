@@ -23,11 +23,11 @@ if (-not (Test-Path $python)) { $python = "python" }
 & $python -c @"
 import json, sys
 src, dst = r'$ConfigSrc', r'$ConfigDst'
-with open(src)  as f: our  = json.load(f)
-with open(dst)  as f: live = json.load(f)
+with open(src, encoding='utf-8')  as f: our  = json.load(f)
+with open(dst, encoding='utf-8')  as f: live = json.load(f)
 for k in ('knowledge', 'STT', 'weather'):
     live[k] = our[k]
-with open(dst, 'w') as f: json.dump(live, f, indent=2)
+with open(dst, 'w', encoding='utf-8') as f: json.dump(live, f, indent=2, ensure_ascii=False)
 print('Config merged.')
 "@
 if ($LASTEXITCODE -ne 0) { Write-Host "Merge failed." -ForegroundColor Red; exit 1 }
