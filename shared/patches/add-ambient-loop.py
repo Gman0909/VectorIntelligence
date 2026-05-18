@@ -178,12 +178,22 @@ func ambientObserveOnce(esn, guid, target string) {
 \t// Release the gRPC connection when done — otherwise every cycle leaks one.
 \tdefer robot.Close()
 
-\t// Silent single-frame capture — no shutter animation, no viewfinder.
-\tctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+\t// Vector keeps his camera feed off when idle or docked, so a cold
+\t// CaptureSingleImage just hangs until it times out. Enable the feed
+\t// first, let the camera spin up, capture, then turn the feed back off.
+\tctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 \tdefer cancel()
+\tif _, err := robot.Conn.EnableImageStreaming(ctx, &vectorpb.EnableImageStreamingRequest{Enable: true}); err != nil {
+\t\tfmt.Printf("[ambient] enable camera feed failed for %s: %v\\n", esn, err)
+\t\treturn
+\t}
+\ttime.Sleep(1500 * time.Millisecond) // let the camera spin up
 \timg, err := robot.Conn.CaptureSingleImage(ctx, &vectorpb.CaptureSingleImageRequest{
 \t\tEnableHighResolution: false,
 \t})
+\tdisableCtx, disableCancel := context.WithTimeout(context.Background(), 5*time.Second)
+\trobot.Conn.EnableImageStreaming(disableCtx, &vectorpb.EnableImageStreamingRequest{Enable: false})
+\tdisableCancel()
 \tif err != nil || img == nil || len(img.Data) == 0 {
 \t\tfmt.Printf("[ambient] image capture failed for %s: %v\\n", esn, err)
 \t\treturn
@@ -204,11 +214,55 @@ func ambientObserveOnce(esn, guid, target string) {
 
 \tfmt.Printf("[ambient] reaction: %q\\n", line)
 \tlastAmbientReaction.Store(time.Now().Unix())
-\tsayText(robot, line)
-\t// sayText is fire-and-forget (it spawns goroutines to acquire behavior
-\t// control and speak). Hold the connection open until the line has been
-\t// spoken, otherwise the deferred Close cuts it off mid-sentence.
-\ttime.Sleep(14 * time.Second)
+\tambientSpeak(robot, line)
+}
+
+// ambientSpeak makes Vector say a line synchronously: it acquires behavior
+// control, waits for the grant, speaks, and releases — all before returning,
+// so the caller's deferred Close never cuts the speech off mid-sentence. The
+// shared fire-and-forget sayText helper is unsafe here: the ambient loop's
+// connection is short-lived and closing it would race the speech.
+func ambientSpeak(robot *vector.Vector, text string) {
+\tctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+\tdefer cancel()
+\tbc, err := robot.Conn.BehaviorControl(ctx)
+\tif err != nil {
+\t\tfmt.Printf("[ambient] behavior control failed: %v\\n", err)
+\t\treturn
+\t}
+\tif err := bc.Send(&vectorpb.BehaviorControlRequest{
+\t\tRequestType: &vectorpb.BehaviorControlRequest_ControlRequest{
+\t\t\tControlRequest: &vectorpb.ControlRequest{
+\t\t\t\tPriority: vectorpb.ControlRequest_OVERRIDE_BEHAVIORS,
+\t\t\t},
+\t\t},
+\t}); err != nil {
+\t\tfmt.Printf("[ambient] control request failed: %v\\n", err)
+\t\treturn
+\t}
+\tfor {
+\t\tresp, err := bc.Recv()
+\t\tif err != nil {
+\t\t\tfmt.Printf("[ambient] control grant failed: %v\\n", err)
+\t\t\treturn
+\t\t}
+\t\tif resp.GetControlGrantedResponse() != nil {
+\t\t\tbreak
+\t\t}
+\t}
+\tif _, err := robot.Conn.SayText(ctx, &vectorpb.SayTextRequest{
+\t\tText:           text,
+\t\tUseVectorVoice: true,
+\t\tDurationScalar: 1.0,
+\t}); err != nil {
+\t\tfmt.Printf("[ambient] SayText failed: %v\\n", err)
+\t}
+\ttime.Sleep(500 * time.Millisecond) // let the audio tail finish
+\tbc.Send(&vectorpb.BehaviorControlRequest{
+\t\tRequestType: &vectorpb.BehaviorControlRequest_ControlRelease{
+\t\t\tControlRelease: &vectorpb.ControlRelease{},
+\t\t},
+\t})
 }
 '''
 
