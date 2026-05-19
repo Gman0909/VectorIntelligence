@@ -183,8 +183,10 @@ reactions, ambient awareness, the connection-leak fix, and more) — see
    ```
 
 5. **Pair Vector** via the **Robots** tab at <http://localhost:8080>. The
-   supervisor advertises `escapepod.local`, so Vector finds the server
-   himself.
+   supervisor advertises `escapepod.local` over mDNS so Vector finds the
+   server automatically. It probes multiple network interfaces and filters
+   VPN addresses, so it works correctly even if Tailscale or another VPN
+   is present or has recently crashed.
 
 ### Linux
 
@@ -233,7 +235,7 @@ section and type the name.
 |---|---|
 | Vector shows the WiFi / exclamation icon | Check `supervisor.log` — it auto-recovers most drops. If it persists it's almost always Vector's **2.4 GHz WiFi link**: `ping <vector-ip>` should be <5 ms with no loss. Move him near the router and pick a clear channel. |
 | Voice stops after a router reboot | Windows may reclassify the network as "Public" and block inbound ports. The installer opens them for all profiles; if it recurs, set the network back to Private. |
-| Reachable but slow / jittery | A VPN (e.g. Tailscale) may be advertising a route for your LAN subnet. The supervisor re-asserts a direct route to Vector; or disable route acceptance on the VPN. |
+| Reachable but slow / jittery | A VPN (e.g. Tailscale) may be advertising a route for your LAN subnet. The supervisor re-asserts a direct /32 route to Vector and filters VPN addresses from its mDNS advertisement automatically. |
 | "Having trouble thinking" | `stop-vector` then `start-vector`; check Ollama is running and the model is pulled. |
 | First reply after idle is slow | Expected — the model is cold-loading into VRAM. It unloads when idle to keep VRAM free. |
 

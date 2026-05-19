@@ -1426,9 +1426,29 @@ _GREETING_SYSTEM = (
     "and Stephen Fry. Someone you know has just come into view; nobody has "
     "said anything yet. Greet them unprompted with ONE short line, in "
     "character, naming them — acknowledge their return without gushing, "
-    "pleased in your own understated way, or dryly so. Plain text only, no "
-    "markdown, no quotes, no {{...}} tokens, under 20 words."
+    "pleased in your own understated way, or dryly so. Vary how you open "
+    "every greeting: never settle into a fixed formula such as 'Name, "
+    "you've returned' — come at it from a genuinely different direction "
+    "each time. Plain text only, no markdown, no quotes, no {{...}} tokens, "
+    "under 20 words."
 )
+
+# Greeting variety: a random angle per greeting plus a list of recent lines to
+# steer away from — without this the model mode-collapses onto one opening
+# ("Name, you've returned...") on every greeting.
+_GREETING_ANGLES = [
+    "open on the time of day, or what the room has been like",
+    "feign weary indifference to their return",
+    "make a dry remark about how long they were gone",
+    "be backhandedly, grudgingly pleased to see them",
+    "note what their arrival has interrupted",
+    "greet them with exaggerated mock formality",
+    "pretend you had barely registered that they had gone",
+    "be wry about the predictability of their comings and goings",
+    "lead with a small complaint, then acknowledge them",
+    "open with a question rather than a statement",
+]
+_recent_greetings: list = []     # recent greeting lines, to steer away from repeats
 
 GREETING_ABSENCE_GAP = 10 * 60   # seconds out of sight that counts as having
                                  # "arrived back"; also how recent a real
@@ -1473,6 +1493,14 @@ async def proactive_greeting(req: GreetingRequest):
     if _mood_state["text"]:
         bits.append(f"Your current mood: {_mood_state['text']}.")
 
+    bits.append(f"For variety, this greeting should: {random.choice(_GREETING_ANGLES)}.")
+    if _recent_greetings:
+        bits.append(
+            "CRITICAL: do not reuse the opening or sentence structure of your "
+            "recent greetings — no shared opening words, no rephrasings of: "
+            + " ; ".join(f'"{g}"' for g in _recent_greetings[-5:]) + "."
+        )
+
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, read=15.0)) as client:
             resp = await client.post(
@@ -1485,7 +1513,7 @@ async def proactive_greeting(req: GreetingRequest):
                          "content": " ".join(bits) + " Greet them now."},
                     ],
                     "stream":      False,
-                    "temperature": 1.0,
+                    "temperature": 1.3,
                     "top_p":       0.95,
                     "seed":        random.randint(1, 2**31 - 1),
                 },
@@ -1497,5 +1525,8 @@ async def proactive_greeting(req: GreetingRequest):
         return {"text": "", "error": str(e)}
 
     line = _strip_for_speech(text)
+    if line:
+        _recent_greetings.append(line)
+        del _recent_greetings[:-6]
     print(f"[greeting] {name} (arrived) -> {line!r}")
     return {"text": line}

@@ -81,43 +81,111 @@ def rotate_log(path: Path):
 _last_good_ip = None  # remembered so a post-wake detection failure can't
                       # silently downgrade mDNS to loopback
 
+# ── IP-classification helpers ─────────────────────────────────────────────────
+# Tailscale CGNAT range: 100.64.0.0/10  →  100.64.x.x – 100.127.x.x
+_TS_LO = (100 << 24) | (64 << 16)
+_TS_HI = (100 << 24) | (128 << 16)
 
-def _detect_local_ip():
-    """Best-effort LAN IP via the UDP-connect trick. Returns None when no
-    real (non-loopback) address is available — typically because the network
-    interface hasn't come up yet, e.g. in the seconds after wake-from-sleep."""
+
+def _ip_int(ip: str) -> int:
+    try:
+        a, b, c, d = ip.split(".")
+        return (int(a) << 24) | (int(b) << 16) | (int(c) << 8) | int(d)
+    except Exception:
+        return 0
+
+
+def _is_tailscale_ip(ip: str) -> bool:
+    """True if ip sits in Tailscale's CGNAT range (100.64.0.0/10)."""
+    n = _ip_int(ip)
+    return _TS_LO <= n < _TS_HI
+
+
+def _is_rfc1918(ip: str) -> bool:
+    n = _ip_int(ip)
+    return (
+        ((10  << 24)               ) <= n < ((11  << 24)                ) or
+        ((172 << 24) | (16 << 16) ) <= n < ((172 << 24) | (32 << 16)  ) or
+        ((192 << 24) | (168 << 16)) <= n < ((192 << 24) | (169 << 16) )
+    )
+
+
+def _probe_local_ip(target: str) -> str | None:
+    """UDP-connect trick: ask the OS which local IP it would use to reach target."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        s.connect(("10.255.255.255", 1))
+        s.connect((target, 1))
         ip = s.getsockname()[0]
+        return ip if (ip and ip != "0.0.0.0"
+                      and not ip.startswith("127.")
+                      and not ip.startswith("169.254.")) else None
     except OSError:
         return None
     finally:
         s.close()
-    if not ip or ip == "0.0.0.0" or ip.startswith("127."):
-        return None
-    return ip
 
 
-def local_ip(wait: float = 0.0) -> str:
-    """This machine's LAN IP (the interface that routes to the LAN).
+def _detect_local_ip(prefer_target: str = None) -> str | None:
+    """Best-effort LAN IP, filtering out Tailscale and VPN addresses.
 
-    Polls for up to `wait` seconds for a real address — the network is often
-    not ready for a second or two after wake-from-sleep, and advertising
-    loopback over mDNS points Vector at itself (the classic "responds once
-    then dead" failure). Falls back to the last known-good IP, and only as a
-    true last resort to loopback."""
+    Using a single probe to 10.255.255.255 fails when Tailscale crashes and
+    leaves stale routing entries: the connect either errors (returning None,
+    which then falls back to loopback) or resolves to the Tailscale CGNAT
+    address (100.64-127.x.x), which Vector can't reach.
+
+    Instead we try multiple probes and filter explicitly:
+    • prefer_target (Vector's known LAN IP) — the most accurate probe because
+      it finds the exact interface that routes to Vector.
+    • 224.0.0.251 (mDNS multicast) — LAN-only; VPN tunnels don't carry
+      multicast, so this probe can never return a VPN address.
+    • Common LAN gateway IPs — tiebreakers for the case where neither of the
+      above resolves."""
+    # Highest-confidence: the interface that actually routes to Vector.
+    if prefer_target:
+        ip = _probe_local_ip(prefer_target)
+        if ip and not _is_tailscale_ip(ip):
+            return ip
+
+    candidates: list[str] = []
+
+    # mDNS multicast — the correct interface by definition.
+    ip = _probe_local_ip("224.0.0.251")
+    if ip and not _is_tailscale_ip(ip):
+        candidates.append(ip)
+
+    # Common gateway IPs as fallbacks.
+    for target in ("192.168.1.1", "192.168.0.1", "10.0.0.1", "172.16.0.1"):
+        ip = _probe_local_ip(target)
+        if ip and not _is_tailscale_ip(ip):
+            candidates.append(ip)
+
+    # Prefer RFC-1918 private LAN addresses.
+    for ip in candidates:
+        if _is_rfc1918(ip):
+            return ip
+    return candidates[0] if candidates else None
+
+
+def local_ip(wait: float = 0.0, prefer_target: str = None) -> str:
+    """This machine's LAN IP for advertising escapepod.local.
+
+    Filters Tailscale CGNAT addresses so mDNS is never published on a VPN
+    interface. If prefer_target is given (e.g. Vector's known IP) we probe
+    routing to it directly — the most accurate way to pick the right interface.
+    Polls for up to `wait` seconds, falls back to the last known-good address,
+    and only as a true last resort returns loopback."""
     global _last_good_ip
     deadline = time.monotonic() + wait
     while True:
-        ip = _detect_local_ip()
+        ip = _detect_local_ip(prefer_target)
         if ip:
             _last_good_ip = ip
             return ip
         if time.monotonic() >= deadline:
             break
         time.sleep(1)
-    if _last_good_ip:
+    # Only fall back to last-good if it's still a plausible LAN address.
+    if _last_good_ip and not _is_tailscale_ip(_last_good_ip):
         log(f"local_ip: network not ready — using last known-good {_last_good_ip}")
         return _last_good_ip
     log("local_ip: no LAN IP available and no known-good fallback — using loopback")
@@ -251,11 +319,17 @@ class MDNS:
     def __init__(self):
         self.zc = None
         self.info = None
+        self._advertised_ip: str | None = None
 
-    def start(self):
+    def start(self, prefer_target: str = None, wait: float = 30.0) -> str:
+        """Advertise escapepod.local. Returns the IP actually published.
+
+        prefer_target is Vector's known LAN IP — passed to local_ip() so we
+        probe routing to Vector directly and pick the interface that talks to
+        him, regardless of whether Tailscale or another VPN is present."""
         from zeroconf import IPVersion, ServiceInfo, Zeroconf
-        # wait: tolerate a network interface that is still coming up (post-wake).
-        ip = local_ip(wait=30)
+        ip = local_ip(wait=wait, prefer_target=prefer_target)
+        self._advertised_ip = ip
         self.zc = Zeroconf(ip_version=IPVersion.V4Only)
         self.info = ServiceInfo(
             type_="_app-proto._tcp.local.",
@@ -267,14 +341,24 @@ class MDNS:
         )
         self.zc.register_service(self.info)
         log(f"mDNS advertising escapepod.local -> {ip}")
+        return ip
 
-    def refresh(self):
-        """Re-register after a sleep — the multicast socket goes stale."""
+    def refresh(self, prefer_target: str = None, wait: float = 30.0) -> str:
+        """Re-register with the current LAN IP — after sleep or IP change."""
         try:
             self.stop()
         except Exception:
             pass
-        self.start()
+        return self.start(prefer_target=prefer_target, wait=wait)
+
+    def check_and_update(self, prefer_target: str = None) -> bool:
+        """Re-advertise if the LAN IP has drifted. Returns True if refreshed."""
+        current = _detect_local_ip(prefer_target)
+        if current and current != self._advertised_ip:
+            log(f"mDNS: IP drift {self._advertised_ip} -> {current} — re-advertising")
+            self.refresh(prefer_target=prefer_target)
+            return True
+        return False
 
     def stop(self):
         if self.zc:
@@ -285,6 +369,7 @@ class MDNS:
             except Exception:
                 pass
             self.zc = None
+            self._advertised_ip = None
 
 
 # ── Vector discovery (mDNS) — replaces find-vector.py ─────────────────────────
@@ -376,6 +461,59 @@ if ($lan) {{
         log(f"Re-asserted direct LAN /32 route to {vector_ip}")
     except Exception as e:
         log(f"ensure_lan_route error: {e}")
+
+
+# ── Hosts-file maintenance ────────────────────────────────────────────────────
+
+def update_hosts_file(ip: str) -> None:
+    """Keep the escapepod.local entry in the system hosts file current.
+
+    Vector uses mDNS to find this server; the hosts entry serves browsers
+    during the initial Wire-Pod setup wizard. Keeping them in sync prevents
+    stale entries confusing setup after a LAN IP change. The supervisor runs
+    with elevated privileges (RunLevel=Highest), so writes normally succeed."""
+    if IS_WINDOWS:
+        hosts = Path(r"C:\Windows\System32\drivers\etc\hosts")
+    else:
+        hosts = Path("/etc/hosts")
+    try:
+        text = hosts.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        log(f"hosts: cannot read ({e})")
+        return
+
+    new_line = f"{ip}\tescapepod.local"
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    found = changed = False
+    for line in lines:
+        s = line.strip()
+        if s and not s.startswith("#") and "escapepod.local" in s:
+            found = True
+            if s.split()[0] != ip:
+                out.append(new_line + "\n")
+                changed = True
+            else:
+                out.append(line)
+        else:
+            out.append(line)
+    if not found:
+        if out and not out[-1].endswith("\n"):
+            out.append("\n")
+        out.append(new_line + "\n")
+        changed = True
+    if not changed:
+        return
+    try:
+        hosts.write_text("".join(out), encoding="utf-8")
+        log(f"hosts: escapepod.local -> {ip}")
+        if IS_WINDOWS:
+            subprocess.run(["ipconfig", "/flushdns"],
+                           capture_output=True, timeout=5)
+    except PermissionError:
+        log("hosts: permission denied — run the supervisor elevated to auto-update")
+    except Exception as e:
+        log(f"hosts: write failed: {e}")
 
 
 # ── Child processes ───────────────────────────────────────────────────────────
@@ -490,7 +628,11 @@ class Supervisor:
         vip = read_vector_ip()
         if vip:
             ensure_lan_route(vip)
-        self.mdns.start()
+        # Pass Vector's known IP as a routing hint so _detect_local_ip() probes
+        # the interface that actually talks to Vector — correct even when
+        # Tailscale is down and left stale 10.x.x.x routing entries behind.
+        lan_ip = self.mdns.start(prefer_target=vip)
+        update_hosts_file(lan_ip)
         self.start_ollama()
         self.start_vectorai()
         self.start_chipper()
@@ -524,6 +666,7 @@ class Supervisor:
     def run(self):
         self.startup()
         last_tick = time.time()
+        _mdns_drift_count = 0   # ticks since last mDNS IP-drift check
         while not self.shutdown:
             for _ in range(HEALTH_PERIOD):
                 if self.shutdown:
@@ -540,17 +683,17 @@ class Supervisor:
             # means the PC was suspended. Refresh everything network-facing.
             if gap > SLEEP_GAP:
                 log(f"wake-from-sleep detected (tick gap {int(gap)}s) — refreshing")
-                # The network interface is usually not up yet right after
-                # wake. Block until a real LAN IP is available (up to 60s)
-                # before re-advertising — otherwise mDNS publishes loopback
-                # and Vector tries to reach the server on itself.
-                log(f"wake-from-sleep: waiting for network, LAN IP {local_ip(wait=60)}")
-                self.mdns.refresh()
                 vip = read_vector_ip()
+                # Block up to 60s for the LAN interface to come up; pass
+                # Vector's IP so we probe the right interface immediately.
+                lan_ip = self.mdns.refresh(prefer_target=vip, wait=60)
+                log(f"wake-from-sleep: LAN IP {lan_ip}")
+                update_hosts_file(lan_ip)
                 if vip:
                     ensure_lan_route(vip)
                 self.bounce_chipper("post-sleep refresh")
                 self.vector_was_up = True
+                _mdns_drift_count = 0
                 continue
 
             # Ollama
@@ -583,6 +726,17 @@ class Supervisor:
             elif not up and self.vector_was_up:
                 log("Vector link lost — will reconnect when it returns")
             self.vector_was_up = up
+
+            # Periodic mDNS/hosts IP-drift check — catches a LAN IP change
+            # (DHCP reassignment, interface rebind) without needing a restart.
+            # Runs every ~60 s (6 × HEALTH_PERIOD at the default 10 s period).
+            _mdns_drift_count += 1
+            if _mdns_drift_count >= 6:
+                _mdns_drift_count = 0
+                vip = read_vector_ip()
+                if self.mdns.check_and_update(prefer_target=vip):
+                    update_hosts_file(self.mdns._advertised_ip)
+                    self.bounce_chipper("LAN IP changed")
 
 
 def main():
