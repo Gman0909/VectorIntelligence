@@ -28,7 +28,7 @@ try {
         -Method POST -Body '{"language":"en-US"}' `
         -ContentType "application/json" -TimeoutSec 30 -UseBasicParsing
 } catch {
-    Fail "set_stt_info failed: $($_.Exception.Message). Has STT_SERVICE=vosk been set and chipper restarted?"
+    Fail "set_stt_info failed: $($_.Exception.Message). Is STT_SERVICE set to 'whisper.cpp' (or 'vosk') and has chipper restarted?"
 }
 
 # Step 2: If the VOSK model isn't already downloaded, wait for it.

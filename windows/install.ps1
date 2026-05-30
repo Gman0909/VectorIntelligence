@@ -364,8 +364,8 @@ Info "chipper-whisper.exe built (the supervisor selects it over the VOSK build).
 # Default to Whisper unless the user previously chose VOSK. WHISPER_MODEL
 # tells the chipper-whisper which model file to load.
 if (-not [System.Environment]::GetEnvironmentVariable("STT_SERVICE","Machine")) {
-    [System.Environment]::SetEnvironmentVariable("STT_SERVICE","whisper","Machine")
-    Info "Set STT_SERVICE=whisper (default). To revert to VOSK: setx STT_SERVICE vosk /M"
+    [System.Environment]::SetEnvironmentVariable("STT_SERVICE","whisper.cpp","Machine")
+    Info "Set STT_SERVICE=whisper.cpp (default). To revert to VOSK: setx STT_SERVICE vosk /M"
 }
 if (-not [System.Environment]::GetEnvironmentVariable("WHISPER_MODEL","Machine")) {
     [System.Environment]::SetEnvironmentVariable("WHISPER_MODEL","base.en","Machine")

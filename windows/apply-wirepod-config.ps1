@@ -32,9 +32,17 @@ print('Config merged.')
 "@
 if ($LASTEXITCODE -ne 0) { Write-Host "Merge failed." -ForegroundColor Red; exit 1 }
 
-# Restart chipper so it picks up the new config.
-Stop-ScheduledTask -TaskName "VectorPod-Chipper" -ErrorAction SilentlyContinue
-Get-Process -Name chipper -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 1
-Start-ScheduledTask -TaskName "VectorPod-Chipper"
-Write-Host "[+] AI config applied. Wire-Pod restarted." -ForegroundColor Green
+# Restart the stack so chipper re-reads apiConfig.json. The supervisor owns
+# chipper (and vector-ai / Ollama), so bouncing its task is how the new config
+# takes effect — chipper runs elevated as the supervisor's child, so stopping
+# it directly isn't reliable from a non-admin shell. Controlling the supervisor
+# task needs no elevation (same as start-vector.ps1 / stop-vector.ps1).
+$sup = Get-ScheduledTask -TaskName "VectorPod-Supervisor" -ErrorAction SilentlyContinue
+if ($sup) {
+    Stop-ScheduledTask  -TaskName "VectorPod-Supervisor" -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    Start-ScheduledTask -TaskName "VectorPod-Supervisor"
+    Write-Host "[+] AI config applied. Supervisor restarted — give it ~15s to bring chipper back up." -ForegroundColor Green
+} else {
+    Write-Host "[+] AI config merged. Start the stack with start-vector.ps1 to load it." -ForegroundColor Green
+}

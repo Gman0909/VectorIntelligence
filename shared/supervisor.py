@@ -43,7 +43,7 @@ CHIPPER_LOG  = POD_DIR / "chipper.log"
 VECTORAI_LOG = POD_DIR / "vector-ai.log"
 
 # ── Tunables (the few things worth changing live here, not scattered) ─────────
-STT_SERVICE   = "whisper"     # whisper | vosk
+STT_SERVICE   = "whisper.cpp"  # whisper.cpp | vosk (must match Wire-Pod's STT names)
 WHISPER_MODEL = "base.en"
 HEALTH_PERIOD = 10            # seconds between health checks
 SLEEP_GAP     = 60            # a tick gap longer than this == PC slept
@@ -573,6 +573,11 @@ class Supervisor:
         # environment variables — keeps the install self-contained.
         env = dict(os.environ)
         env["STT_SERVICE"] = STT_SERVICE
+        # Wire-Pod re-reads STT_LANGUAGE from env whenever the service string
+        # changes (see WriteSTT in chipper/pkg/vars/config.go), so pin it here
+        # too — otherwise a service change would blank the language until the
+        # web setup's set_stt_info runs again.
+        env["STT_LANGUAGE"] = "en-US"
         env["WHISPER_MODEL"] = WHISPER_MODEL
         env["DISABLE_MDNS"] = "true"   # the supervisor does mDNS itself
         env["DEBUG_LOGGING"] = "true"
