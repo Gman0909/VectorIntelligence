@@ -188,6 +188,14 @@ reactions, ambient awareness, the connection-leak fix, and more) — see
    VPN addresses, so it works correctly even if Tailscale or another VPN
    is present or has recently crashed.
 
+   > **Pairing method:** this stack uses the escape-pod BLE flow (the default
+   > "Setup with the app" path in the Robots tab) on a **stock-firmware**
+   > Vector. Do **not** use the SSH-setup tab — that path is for
+   > WireOS/dev-unlocked robots and runs an install script *on the robot*; if
+   > that script is missing or partial you'll see
+   > `Process exited with status 127 … generating new robot cert`, which is a
+   > robot-side failure, not a problem with this server.
+
 ### Linux
 
 ```bash
