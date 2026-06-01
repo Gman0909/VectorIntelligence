@@ -237,6 +237,11 @@ info "Creating Python venv..."
 python3 -m venv "$VECTORAI_DIR/venv"
 "$VECTORAI_DIR/venv/bin/pip" install -q --upgrade pip
 "$VECTORAI_DIR/venv/bin/pip" install -q -r "$VECTORAI_DIR/requirements.txt"
+# Verify the critical runtime deps actually landed — otherwise vector-ai
+# crash-loops on "No module named uvicorn" and the supervisor just keeps
+# restarting it. (set -e aborts on a failed pip, but not on pip exit 0 +
+# a broken import, so check explicitly.)
+"$VECTORAI_DIR/venv/bin/python" -c "import uvicorn, fastapi, httpx, zeroconf, dotenv, pydantic"
 info "Python service ready."
 
 # ── 6. Systemd service — one supervisor unit ─────────────────────────────────
