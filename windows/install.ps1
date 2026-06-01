@@ -394,12 +394,23 @@ if (-not (Test-Path (Join-Path $VectorAIDir "venv"))) {
     python -m venv (Join-Path $VectorAIDir "venv")
 }
 Info "Installing Python dependencies..."
-& (Join-Path $VectorAIDir "venv\Scripts\python.exe") -m pip install --upgrade pip --quiet
-& (Join-Path $VectorAIDir "venv\Scripts\python.exe") -m pip install -r (Join-Path $VectorAIDir "requirements.txt") --quiet
+$VenvPy   = Join-Path $VectorAIDir "venv\Scripts\python.exe"
+$ReqFile  = Join-Path $VectorAIDir "requirements.txt"
+& $VenvPy -m pip install --upgrade pip --quiet
+# No --quiet here: a failed dependency install must be visible, not silently
+# swallowed. (Don't trust $ErrorActionPreference to catch it — a native
+# command's non-zero exit doesn't throw, so we check $LASTEXITCODE.)
+& $VenvPy -m pip install -r $ReqFile
+if ($LASTEXITCODE -ne 0) { Fail "pip failed to install vector-ai dependencies (see output above). Fix the cause (usually a flaky network) and re-run install.ps1." }
 # zeroconf is for the mDNS responder we run alongside chipper (Wire-Pod
 # advertises only a service entry; Vector also needs an A-record for
 # escapepod.local, which is what zeroconf provides).
-& (Join-Path $VectorAIDir "venv\Scripts\python.exe") -m pip install zeroconf --quiet
+& $VenvPy -m pip install zeroconf --quiet
+# Verify the critical runtime deps actually landed. A partial pip install
+# otherwise leaves vector-ai crash-looping on "No module named uvicorn",
+# which the supervisor papers over as an endless "vector-ai unhealthy" loop.
+& $VenvPy -c "import uvicorn, fastapi, httpx, zeroconf, dotenv, pydantic"
+if ($LASTEXITCODE -ne 0) { Fail "vector-ai dependencies are incomplete (import check failed). Run: & '$VenvPy' -m pip install -r '$ReqFile'" }
 Info "vector-ai ready."
 
 # Note: the standalone mdns-responder.py and find-vector.py are no longer
