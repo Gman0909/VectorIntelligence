@@ -78,8 +78,41 @@ function Install-IfMissing ($cmd, $id, $label) {
     if (-not (CmdWorks $cmd)) { Fail "Failed to install $label — command still not working after winget." }
     Info "$label installed."
 }
+
+# Resolves a real Python 3.11 interpreter (path to python.exe), or $null.
+# We pin to 3.11 on purpose: the vector-ai deps (pydantic-core 2.20.1 and
+# friends) publish cp311 wheels but none for 3.12/3.13/3.14, so a venv built
+# on any newer Python forces a Rust/C source build that fails on machines
+# without a compiler — that's the "No module named uvicorn" crash-loop users
+# hit. A newer python already on PATH does NOT satisfy this requirement.
+function Find-Python311Exe {
+    if (CmdExists "py") {
+        $exe = (& py -3.11 -c "import sys; print(sys.executable)" 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $exe -and (Test-Path "$exe".Trim())) { return "$exe".Trim() }
+    }
+    $candidates = @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Python\Python311\python.exe"),
+        (Join-Path $env:ProgramFiles "Python311\python.exe"),
+        (Join-Path ${env:ProgramFiles(x86)} "Python311\python.exe"),
+        "C:\Python311\python.exe"
+    )
+    foreach ($c in $candidates) { if ($c -and (Test-Path $c)) { return $c } }
+    return $null
+}
+
 Install-IfMissing "go"     "GoLang.Go"             "Go"
-Install-IfMissing "python" "Python.Python.3.11"    "Python 3.11"
+# Python 3.11 specifically (see Find-Python311Exe). A newer python on PATH must
+# NOT short-circuit this, so we check for 3.11 itself rather than "any python".
+if (-not (Find-Python311Exe)) {
+    Info "Installing Python 3.11 via winget..."
+    winget install --id Python.Python.3.11 --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
+    Refresh-Path
+}
+$Py311 = Find-Python311Exe
+if (-not $Py311) {
+    Fail "Python 3.11 is required but could not be found or installed. Install it from https://www.python.org/downloads/ (3.11.x) and re-run install.ps1."
+}
+Info "Python 3.11 ready: $Py311"
 Install-IfMissing "git"    "Git.Git"               "Git"
 Install-IfMissing "ollama" "Ollama.Ollama"         "Ollama"
 
@@ -389,13 +422,29 @@ Copy-Item "$SharedDir\vector-ai\requirements.txt" (Join-Path $VectorAIDir "requi
 if (-not (Test-Path (Join-Path $VectorAIDir ".env"))) {
     Copy-Item "$SharedDir\vector-ai\.env" (Join-Path $VectorAIDir ".env") -Force
 }
-if (-not (Test-Path (Join-Path $VectorAIDir "venv"))) {
-    Info "Creating Python venv..."
-    python -m venv (Join-Path $VectorAIDir "venv")
+$VenvDir = Join-Path $VectorAIDir "venv"
+$VenvPy  = Join-Path $VenvDir "Scripts\python.exe"
+$ReqFile = Join-Path $VectorAIDir "requirements.txt"
+$Py311   = Find-Python311Exe
+if (-not $Py311) { Fail "Python 3.11 is required but was not found. Re-run install.ps1 — the prerequisites step installs it." }
+
+# A venv built on the wrong Python (e.g. a 3.12/3.14 that happened to be first
+# on PATH) silently breaks the install: pydantic-core has no wheel for it and
+# the source build fails without a compiler. Detect the venv's real version and
+# rebuild it on 3.11 if it doesn't match.
+if (Test-Path $VenvPy) {
+    $venvVer = (& $VenvPy -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null)
+    if ("$venvVer".Trim() -ne "3.11") {
+        Warn "Existing venv is Python '$venvVer', not 3.11 — rebuilding it on 3.11."
+        Remove-Item -Recurse -Force $VenvDir
+    }
+}
+if (-not (Test-Path $VenvPy)) {
+    Info "Creating Python 3.11 venv..."
+    & $Py311 -m venv $VenvDir
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $VenvPy)) { Fail "Failed to create the Python venv with $Py311." }
 }
 Info "Installing Python dependencies..."
-$VenvPy   = Join-Path $VectorAIDir "venv\Scripts\python.exe"
-$ReqFile  = Join-Path $VectorAIDir "requirements.txt"
 & $VenvPy -m pip install --upgrade pip --quiet
 # No --quiet here: a failed dependency install must be visible, not silently
 # swallowed. (Don't trust $ErrorActionPreference to catch it — a native
