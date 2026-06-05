@@ -27,6 +27,20 @@ die()   { echo -e "${RED}[✗] $*${NC}" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] && die "Do not run as root. Run as your regular user (sudo will be used where needed)."
 
+# ── Optional arguments ────────────────────────────────────────────────────────
+# --web-port N sets Wire-Pod's web UI / config-server port (default 8080). It's
+# written to pod.conf so the supervisor and initial-setup.sh stay in agreement.
+WEB_PORT=8080
+WEB_PORT_SET=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --web-port)   WEB_PORT="${2:-}"; WEB_PORT_SET=true; shift 2 ;;
+        --web-port=*) WEB_PORT="${1#*=}"; WEB_PORT_SET=true; shift ;;
+        *) die "Unknown argument: $1 (supported: --web-port N)" ;;
+    esac
+done
+[[ "$WEB_PORT" =~ ^[0-9]+$ ]] || die "--web-port must be numeric (got: '$WEB_PORT')."
+
 # ── 1. System dependencies ────────────────────────────────────────────────────
 step "System dependencies"
 sudo apt-get update -qq
@@ -221,10 +235,22 @@ cd "$SCRIPT_DIR"
 # ── 5. vector-ai Python service ───────────────────────────────────────────────
 step "vector-ai Python service"
 mkdir -p "$VECTORAI_DIR"
+mkdir -p "$HOME/vector-pod"
 cp "$SHARED_DIR/vector-ai/service.py"       "$VECTORAI_DIR/service.py"
 cp "$SHARED_DIR/vector-ai/memory.py"        "$VECTORAI_DIR/memory.py"
 cp "$SHARED_DIR/vector-ai/requirements.txt" "$VECTORAI_DIR/requirements.txt"
 cp "$SHARED_DIR/supervisor.py"              "$HOME/vector-pod/supervisor.py"
+
+# pod.conf — single source of truth for the web UI port, read by supervisor.py
+# and initial-setup.sh. An explicit --web-port wins; otherwise preserve any
+# value already there so re-running the installer won't clobber a manual edit.
+POD_CONF="$HOME/vector-pod/pod.conf"
+if ! $WEB_PORT_SET && [ -f "$POD_CONF" ]; then
+    EXISTING=$(sed -n 's/^[[:space:]]*WEB_PORT[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$POD_CONF" | head -1 || true)
+    [ -n "${EXISTING:-}" ] && WEB_PORT="$EXISTING"
+fi
+echo "WEB_PORT=$WEB_PORT" > "$POD_CONF"
+info "pod.conf written (WEB_PORT=$WEB_PORT)."
 
 if [ ! -f "$VECTORAI_DIR/.env" ]; then
     cp "$SHARED_DIR/vector-ai/.env" "$VECTORAI_DIR/.env"
@@ -270,7 +296,7 @@ echo ""
 echo -e "  1. Bring the stack up:"
 echo "       bash $SCRIPT_DIR/start-vector.sh"
 echo ""
-echo -e "  2. Open the web UI at http://${LOCAL_IP}:8080"
+echo -e "  2. Open the web UI at http://${LOCAL_IP}:${WEB_PORT}"
 echo "     Set the server IP to ${LOCAL_IP}, choose English STT, complete setup."
 echo ""
 echo -e "  3. Apply the AI config:"

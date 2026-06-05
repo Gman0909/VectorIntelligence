@@ -12,8 +12,14 @@ $ConfigSrc   = Join-Path $SharedDir   "config\wirepod-apiConfig.json"
 $ConfigDst   = Join-Path $WirePodDir  "chipper\apiConfig.json"
 
 if (-not (Test-Path $ConfigDst)) {
+    $WebPort = 8080
+    $PodConf = Join-Path $env:USERPROFILE "vector-pod\pod.conf"
+    if (Test-Path $PodConf) {
+        $m = Get-Content $PodConf | Where-Object { $_ -match '^\s*WEB_PORT\s*=\s*(\d+)\s*$' } | Select-Object -First 1
+        if ($m -match 'WEB_PORT\s*=\s*(\d+)') { $WebPort = [int]$Matches[1] }
+    }
     Write-Host "[!] Wire-Pod config not found at $ConfigDst." -ForegroundColor Yellow
-    Write-Host "    Has Wire-Pod's first-run setup been completed at http://localhost:8080 ?"
+    Write-Host "    Has Wire-Pod's first-run setup been completed at http://localhost:$WebPort ?"
     exit 1
 }
 

@@ -48,6 +48,18 @@ WHISPER_MODEL = "base.en"
 HEALTH_PERIOD = 10            # seconds between health checks
 SLEEP_GAP     = 60            # a tick gap longer than this == PC slept
 LOG_MAX_BYTES = 5 * 1024 * 1024  # a log past this is rotated aside at startup
+WEB_PORT      = "8080"        # Wire-Pod web UI / config server port
+
+# The installer's -WebPort / --web-port writes an override to pod.conf next to
+# this file, so the supervisor, the setup scripts and the firewall all agree on
+# one value. Only WEB_PORT is read here, and only if it's numeric.
+try:
+    for _line in (POD_DIR / "pod.conf").read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if _line.startswith("WEB_PORT=") and _line.split("=", 1)[1].strip().isdigit():
+            WEB_PORT = _line.split("=", 1)[1].strip()
+except OSError:
+    pass
 
 EXE = ".exe" if IS_WINDOWS else ""
 
@@ -581,6 +593,10 @@ class Supervisor:
         env["WHISPER_MODEL"] = WHISPER_MODEL
         env["DISABLE_MDNS"] = "true"   # the supervisor does mDNS itself
         env["DEBUG_LOGGING"] = "true"
+        # Wire-Pod binds its web UI / config server to WEBSERVER_PORT (see
+        # vars.go); default 8080. Pin it from WEB_PORT so a port chosen at
+        # install time (pod.conf) actually takes effect.
+        env["WEBSERVER_PORT"] = WEB_PORT
         return env
 
     def start_ollama(self):

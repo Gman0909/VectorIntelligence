@@ -162,6 +162,13 @@ reactions, ambient awareness, the connection-leak fix, and more) — see
    ```powershell
    .\windows\install.ps1
    ```
+
+   > **Custom web UI port?** Add `-WebPort <n>` (e.g.
+   > `.\windows\install.ps1 -WebPort 8086`) to move Wire-Pod's web UI / config
+   > server off the default 8080. It's saved to `vector-pod\pod.conf`; the
+   > supervisor, setup scripts and firewall all read it from there. The
+   > voice/pairing ports (443, 80, 8084) are fixed — Vector expects those.
+
    It installs anything missing via `winget` (Go, Python, Git, MSYS2/mingw,
    Ollama, the Vulkan SDK), clones and builds Wire-Pod, builds GPU Whisper,
    sets up the `vector-ai` environment, registers the **VectorPod-Supervisor**
@@ -201,6 +208,9 @@ reactions, ambient awareness, the connection-leak fix, and more) — see
 ```bash
 cd linux && bash install.sh
 ```
+
+> Add `--web-port <n>` (e.g. `bash install.sh --web-port 8086`) to move the web
+> UI off the default 8080; it's saved to `~/vector-pod/pod.conf`.
 
 This installs dependencies, builds Wire-Pod and Whisper, grants chipper
 permission to bind privileged ports without root, and registers

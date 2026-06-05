@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # apply-wirepod-config.sh — Apply AI settings to Wire-Pod after initial setup.
-# Run this AFTER completing Wire-Pod's web UI setup (http://<pi-ip>:8080).
+# Run this AFTER completing Wire-Pod's web UI setup (http://<pi-ip>:<web port, default 8080>).
 # It merges our AI config into Wire-Pod's apiConfig.json without wiping
 # the SSL/enrollment fields that the setup UI wrote.
 

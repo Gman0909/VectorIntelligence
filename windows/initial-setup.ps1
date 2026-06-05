@@ -1,6 +1,6 @@
 ﻿# initial-setup.ps1 — Drive Wire-Pod's first-run wizard via REST.
 #
-# Equivalent to visiting http://localhost:8080 in a browser, choosing English
+# Equivalent to visiting the Wire-Pod web UI in a browser, choosing English
 # STT, waiting for the VOSK model to download, and clicking "use IP mode on
 # port 443". Then applies our AI config.
 #
@@ -13,18 +13,28 @@ function Info ($msg) { Write-Host "[+] $msg" -ForegroundColor Green }
 function Warn ($msg) { Write-Host "[!] $msg" -ForegroundColor Yellow }
 function Fail ($msg) { Write-Host "[X] $msg" -ForegroundColor Red; exit 1 }
 
+# The web UI port the installer chose (pod.conf next to supervisor.py). The
+# supervisor binds Wire-Pod's web server to this same value.
+$WebPort = 8080
+$PodConf = Join-Path $env:USERPROFILE "vector-pod\pod.conf"
+if (Test-Path $PodConf) {
+    $m = Get-Content $PodConf | Where-Object { $_ -match '^\s*WEB_PORT\s*=\s*(\d+)\s*$' } | Select-Object -First 1
+    if ($m -match 'WEB_PORT\s*=\s*(\d+)') { $WebPort = [int]$Matches[1] }
+}
+$Base = "http://localhost:$WebPort"
+
 # Sanity-check Wire-Pod is up.
 try {
-    Invoke-WebRequest "http://localhost:8080" -TimeoutSec 5 -UseBasicParsing | Out-Null
+    Invoke-WebRequest $Base -TimeoutSec 5 -UseBasicParsing | Out-Null
 } catch {
-    Fail "Wire-Pod web UI not responding on port 8080. Run start-vector.ps1 first."
+    Fail "Wire-Pod web UI not responding on port $WebPort. Run start-vector.ps1 first."
 }
 
 # Step 1: Tell Wire-Pod which STT language we want.
 Info "Setting STT language to en-US..."
 $resp = $null
 try {
-    $resp = Invoke-WebRequest "http://localhost:8080/api/set_stt_info" `
+    $resp = Invoke-WebRequest "$Base/api/set_stt_info" `
         -Method POST -Body '{"language":"en-US"}' `
         -ContentType "application/json" -TimeoutSec 30 -UseBasicParsing
 } catch {
@@ -36,7 +46,7 @@ if ($resp.Content -match "downloading") {
     Info "Downloading VOSK English model (~50 MB)..."
     while ($true) {
         Start-Sleep -Seconds 5
-        $status = (Invoke-WebRequest "http://localhost:8080/api/get_download_status" -UseBasicParsing).Content
+        $status = (Invoke-WebRequest "$Base/api/get_download_status" -UseBasicParsing).Content
         Write-Host "    status: $status"
         if ($status -match "success")          { Info "VOSK model installed."; break }
         if ($status -match "error")            { Fail "VOSK download failed: $status" }
@@ -51,7 +61,7 @@ if ($resp.Content -match "downloading") {
 # but caused pairing activation to fail because of how wpsetup pushes config.
 Info "Switching Wire-Pod to escape pod mode and binding port 443..."
 try {
-    $resp = Invoke-WebRequest "http://localhost:8080/api-chipper/use_ep" -TimeoutSec 30 -UseBasicParsing
+    $resp = Invoke-WebRequest "$Base/api-chipper/use_ep" -TimeoutSec 30 -UseBasicParsing
     Info "Wire-Pod is now in escape pod mode, serving on :443."
 } catch {
     Fail "use_ep failed: $($_.Exception.Message)"
@@ -69,4 +79,4 @@ Info "Applying our AI config (personality, vector-ai endpoint)..."
 
 Write-Host ""
 Write-Host "Initial setup complete." -ForegroundColor Green
-Write-Host "  Next step: open http://localhost:8080, go to the Robots tab, and pair Vector."
+Write-Host "  Next step: open $Base, go to the Robots tab, and pair Vector."

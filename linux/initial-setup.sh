@@ -11,18 +11,27 @@ info() { echo -e "${GREEN}[+]${NC} $*"; }
 warn() { echo -e "${YELLOW}[!]${NC} $*"; }
 fail() { echo -e "${RED}[X]${NC} $*" >&2; exit 1; }
 
-curl -s --connect-timeout 3 http://localhost:8080 >/dev/null \
-    || fail "Wire-Pod web UI not responding on 8080. Run: sudo systemctl start wire-pod"
+# Web UI port chosen at install time (pod.conf next to supervisor.py).
+WEB_PORT=8080
+POD_CONF="$HOME/vector-pod/pod.conf"
+if [ -f "$POD_CONF" ]; then
+    PORT_FROM_CONF=$(sed -n 's/^[[:space:]]*WEB_PORT[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$POD_CONF" | head -1 || true)
+    [ -n "${PORT_FROM_CONF:-}" ] && WEB_PORT="$PORT_FROM_CONF"
+fi
+BASE="http://localhost:$WEB_PORT"
+
+curl -s --connect-timeout 3 "$BASE" >/dev/null \
+    || fail "Wire-Pod web UI not responding on $WEB_PORT. Run: sudo systemctl start wire-pod"
 
 info "Setting STT language to en-US..."
-resp=$(curl -s -X POST http://localhost:8080/api/set_stt_info \
+resp=$(curl -s -X POST "$BASE/api/set_stt_info" \
        -H 'Content-Type: application/json' -d '{"language":"en-US"}')
 
 if echo "$resp" | grep -q "downloading"; then
     info "Downloading VOSK English model (~50 MB)..."
     while true; do
         sleep 5
-        status=$(curl -s http://localhost:8080/api/get_download_status)
+        status=$(curl -s "$BASE/api/get_download_status")
         echo "    status: $status"
         if echo "$status" | grep -q "success";         then info "VOSK installed."; break; fi
         if echo "$status" | grep -q "error";           then fail "VOSK download failed: $status"; fi
@@ -35,7 +44,7 @@ fi
 # server endpoint and resolves it via mDNS (avahi-daemon on Linux handles
 # this natively from the system hostname).
 info "Switching Wire-Pod to escape pod mode..."
-curl -s --max-time 30 "http://localhost:8080/api-chipper/use_ep" >/dev/null \
+curl -s --max-time 30 "$BASE/api-chipper/use_ep" >/dev/null \
     || fail "use_ep call failed"
 sleep 3
 info "Wire-Pod is now in escape pod mode."
@@ -57,4 +66,4 @@ fi
 
 echo ""
 echo -e "${GREEN}Initial setup complete.${NC}"
-echo "Next: factory-reset Vector and pair via http://$(hostname -I | awk '{print $1}'):8080 → Bot Setup tab."
+echo "Next: factory-reset Vector and pair via http://$(hostname -I | awk '{print $1}'):${WEB_PORT} → Bot Setup tab."

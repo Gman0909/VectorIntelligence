@@ -11,13 +11,23 @@
 # After install completes:  daily use is start-vector.ps1 / stop-vector.ps1
 
 #Requires -Version 5.1
+[CmdletBinding()]
+param(
+    # Wire-Pod's web UI / config-server port (its WEBSERVER_PORT). Default 8080.
+    # Saved to pod.conf so the supervisor, setup scripts and firewall agree on it.
+    [ValidateRange(1, 65535)]
+    [int]$WebPort = 8080
+)
 $ErrorActionPreference = "Stop"
 
 # ── Self-elevate if not running as admin ──────────────────────────────────────
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "Re-launching as administrator..." -ForegroundColor Yellow
-    Start-Process powershell -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    # Forward -WebPort only when the user actually passed it, so the elevated
+    # run can distinguish an explicit choice from the default (see Pod config).
+    $fwd = if ($PSBoundParameters.ContainsKey('WebPort')) { " -WebPort $WebPort" } else { "" }
+    Start-Process powershell -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`"$fwd"
     exit
 }
 
@@ -482,14 +492,31 @@ if ($content -notmatch "escapepod\.local") {
 }
 ipconfig /flushdns | Out-Null
 
+# ── Pod config (pod.conf) ─────────────────────────────────────────────────────
+# Single source of truth for the web UI port. supervisor.py, initial-setup.ps1
+# and the firewall rule below all read WEB_PORT from here so they never drift.
+# An explicit -WebPort wins; otherwise we preserve whatever's already in
+# pod.conf, so re-running the installer doesn't clobber a hand-edited port.
+Step "Pod config"
+New-Item -ItemType Directory -Force $InstallRoot | Out-Null
+$PodConf = Join-Path $InstallRoot "pod.conf"
+if (-not $PSBoundParameters.ContainsKey('WebPort') -and (Test-Path $PodConf)) {
+    $existing = Get-Content $PodConf | Where-Object { $_ -match '^\s*WEB_PORT\s*=\s*(\d+)\s*$' } | Select-Object -First 1
+    if ($existing -match 'WEB_PORT\s*=\s*(\d+)') { $WebPort = [int]$Matches[1] }
+}
+# ASCII (no BOM) — supervisor.py reads this as UTF-8 and a BOM would break its
+# `WEB_PORT=` line check.
+Set-Content -Path $PodConf -Value "WEB_PORT=$WebPort" -Encoding ASCII
+Info "Web UI port: $WebPort (pod.conf at $PodConf)."
+
 # ── 6. Firewall ──────────────────────────────────────────────────────────────
 Step "Windows Firewall"
-# 443 = chipper gRPC/voice, 8080 = web UI, 80 = Vector's connCheck pings,
-# 8084 = Vector 2.0.1 compatibility endpoint. Vector connects INBOUND to
-# all of these — miss any and Vector shows the wifi-exclamation icon.
-# Profile=Any so a Public-profile reclassification (common after a router
-# reboot) doesn't silently block them.
-foreach ($p in @(443, 8080, 80, 8084)) {
+# 443 = chipper gRPC/voice, $WebPort = web UI (WEB_PORT, default 8080),
+# 80 = Vector's connCheck pings, 8084 = Vector 2.0.1 compatibility endpoint.
+# Vector connects INBOUND to all of these — miss any and Vector shows the
+# wifi-exclamation icon. Profile=Any so a Public-profile reclassification
+# (common after a router reboot) doesn't silently block them.
+foreach ($p in @(443, $WebPort, 80, 8084)) {
     $existing = Get-NetFirewallRule -DisplayName "VectorPod-$p" -ErrorAction SilentlyContinue
     if (-not $existing) {
         New-NetFirewallRule -DisplayName "VectorPod-$p" -Direction Inbound -Protocol TCP -LocalPort $p -Action Allow -Profile Any | Out-Null
@@ -541,7 +568,7 @@ Write-Host "First-time Wire-Pod setup (one time only):" -ForegroundColor Yellow
 Write-Host "  1. Run:  .\start-vector.ps1     (bring the stack up)"
 Write-Host "  2. Run:  .\initial-setup.ps1    (escape-pod mode + STT model + certs)"
 Write-Host "  3. Run:  .\apply-wirepod-config.ps1   (personality / AI config)"
-Write-Host "  4. Pair Vector via the Robots tab at http://localhost:8080"
+Write-Host "  4. Pair Vector via the Robots tab at http://localhost:$WebPort"
 Write-Host ""
 Write-Host "  NOTE: let initial-setup.ps1 configure Wire-Pod — do NOT pick 'server IP'"
 Write-Host "        mode in the web wizard. This stack pairs in escape-pod mode; IP"
