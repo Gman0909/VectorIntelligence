@@ -53,6 +53,19 @@ function Warn    ($msg) { Write-Host "[!] $msg"     -ForegroundColor Yellow }
 function Fail    ($msg) { Write-Host "[X] $msg"     -ForegroundColor Red; exit 1 }
 function CmdExists ($name) { return [bool](Get-Command $name -ErrorAction SilentlyContinue) }
 
+# Runs a patch script and aborts the install if it doesn't apply cleanly. A
+# silently-skipped patch still compiles and would ship a broken binary — e.g. a
+# re-introduced gRPC connection leak that drops Vector after a few voice
+# commands — so a non-zero exit must be fatal. ($ErrorActionPreference="Stop"
+# does NOT trap a native exe's exit code, so this has to be explicit; the Linux
+# installer gets the same guarantee for free from `set -e`.)
+function Patch ($script, $target) {
+    python $script $target
+    if ($LASTEXITCODE -ne 0) {
+        Fail "Patch failed to apply: $(Split-Path -Leaf $script) (exit $LASTEXITCODE). The pinned Wire-Pod/SDK source has likely drifted from the patch anchor; refusing to build with a patch silently missing."
+    }
+}
+
 # Detects real installs vs. Microsoft Store "open the Store" stubs (which are
 # 0-byte placeholders that PowerShell finds via PATH). A real install resolves
 # to a binary at least a few KB in size. Avoids running --version which has
@@ -218,49 +231,49 @@ if ($newVad -ne $vadSrc) {
 }
 
 Info "Expanding animation vocabulary..."
-python "$SharedDir\patches\expand-animations.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim_cmds.go")
+Patch "$SharedDir\patches\expand-animations.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim_cmds.go")
 
 Info "Adding wake-word interrupt grace period..."
-python "$SharedDir\patches\wake-word-grace-period.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim_interrupt.go")
+Patch "$SharedDir\patches\wake-word-grace-period.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim_interrupt.go")
 
 Info "Making the back button interrupt Vector's speech..."
-python "$SharedDir\patches\add-button-interrupt.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim_interrupt.go")
+Patch "$SharedDir\patches\add-button-interrupt.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim_interrupt.go")
 
 Info "Muting wake-word interrupts during getImage (stops Vector's own shutter sound self-interrupting)..."
-python "$SharedDir\patches\wake-word-mute-during-getimage.py" $WirePodDir
+Patch "$SharedDir\patches\wake-word-mute-during-getimage.py" $WirePodDir
 
 Info "Adding on-demand face detection (per-interaction only, never a 24/7 firehose)..."
-python "$SharedDir\patches\add-ondemand-face.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim_interrupt.go")
+Patch "$SharedDir\patches\add-ondemand-face.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim_interrupt.go")
 
 Info "Removing photo viewfinder + 3-2-1 countdown (shutter animation stays — it's our audio cue)..."
-python "$SharedDir\patches\remove-photo-countdown.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim_cmds.go")
+Patch "$SharedDir\patches\remove-photo-countdown.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim_cmds.go")
 
 Info "Routing 'dance' and 'lookAtUser' aliases to Vector's built-in behaviours..."
-python "$SharedDir\patches\use-builtin-behaviors.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim_cmds.go")
+Patch "$SharedDir\patches\use-builtin-behaviors.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim_cmds.go")
 
 Info "On vision queries, dispatch intent_imperative_lookatme BEFORE the LLM so Vector rapid-turns using his fresh mic-direction cache..."
-python "$SharedDir\patches\prelim-lookatme-then-llm.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\preqs\intent_graph.go")
+Patch "$SharedDir\patches\prelim-lookatme-then-llm.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\preqs\intent_graph.go")
 
 Info "Slowing Vector's TTS slightly for clarity..."
-python "$SharedDir\patches\slow-tts.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim_cmds.go")
+Patch "$SharedDir\patches\slow-tts.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim_cmds.go")
 
 Info "Adding LLM-driven eye colour command (mood expression)..."
-python "$SharedDir\patches\add-eye-color-cmd.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim_cmds.go")
+Patch "$SharedDir\patches\add-eye-color-cmd.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim_cmds.go")
 
 Info "Adding background sensor reactions (pickup, putdown, pet)..."
-python "$SharedDir\patches\add-sensor-reactions.py" $WirePodDir
+Patch "$SharedDir\patches\add-sensor-reactions.py" $WirePodDir
 
 Info "Fixing the gRPC connection leak (defer robot.Close() in kgsim.go)..."
-python "$SharedDir\patches\fix-connection-leak.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim.go")
+Patch "$SharedDir\patches\fix-connection-leak.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim.go")
 
 Info "Fixing name parsing so face enrollment captures just the name..."
-python "$SharedDir\patches\fix-name-extraction.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\intentparam.go")
+Patch "$SharedDir\patches\fix-name-extraction.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\intentparam.go")
 
 Info "Adding the concurrent face probe (knows the speaker before the LLM replies)..."
-python "$SharedDir\patches\add-face-probe.py" $WirePodDir
+Patch "$SharedDir\patches\add-face-probe.py" $WirePodDir
 
 Info "Adding ambient awareness (idle novelty observation loop)..."
-python "$SharedDir\patches\add-ambient-loop.py" $WirePodDir
+Patch "$SharedDir\patches\add-ambient-loop.py" $WirePodDir
 
 # ── Patched vector-go-sdk ─────────────────────────────────────────────────────
 # The upstream SDK opens a gRPC connection per vector.New() but never closes
@@ -284,7 +297,7 @@ if (-not (Test-Path "$SdkDir\go.mod")) {
     Remove-Item -Recurse -Force (Join-Path $SdkDir ".git") -ErrorAction SilentlyContinue
 }
 # add-sdk-close.py is idempotent — safe to run on every install.
-python "$SharedDir\patches\add-sdk-close.py" (Join-Path $SdkDir "pkg\vector\vector.go")
+Patch "$SharedDir\patches\add-sdk-close.py" (Join-Path $SdkDir "pkg\vector\vector.go")
 # Redirect chipper's dependency to the local patched copy.
 $ChipperGoMod = Join-Path $WirePodDir "chipper\go.mod"
 if ((Get-Content $ChipperGoMod -Raw) -notmatch 'replace github\.com/fforchino/vector-go-sdk') {
