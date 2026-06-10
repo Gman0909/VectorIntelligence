@@ -19,8 +19,10 @@ No hardcoded paths or IPs: every path is derived from this file's location,
 Vector is found by mDNS, and the LAN IP is detected at runtime. Portable
 between machines and (with the platform guards) Windows and Linux.
 """
+import collections
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -60,6 +62,20 @@ try:
             WEB_PORT = _line.split("=", 1)[1].strip()
 except OSError:
     pass
+
+# SDK-wedge detector: Vector's on-board gateway can wedge half-dead — TCP to
+# :443 still connects (so vector_reachable() stays True) but every NEW gRPC
+# stream hangs to deadline, and Vector shows the wifi icon while the network
+# looks perfect (issue #8). chipper's background loops surface that state as
+# repeated robot-RPC timeout lines in chipper.log; bounce chipper when several
+# arrive while Vector is TCP-reachable — closing every connection chipper
+# holds is exactly what clears the gateway. The pattern deliberately requires
+# "rpc error" so vector-ai HTTP timeouts ("Client.Timeout exceeded") and
+# ordinary stream resets ("forcibly closed") never count.
+WEDGE_PATTERN  = re.compile(r"rpc error.*(DeadlineExceeded|i/o timeout)")
+WEDGE_STRIKES  = 3        # robot-RPC hangs within the window before we act
+WEDGE_WINDOW   = 45 * 60  # seconds; spans the chipper loops' failure backoff
+WEDGE_COOLDOWN = 30 * 60  # min seconds between wedge bounces (no thrashing)
 
 EXE = ".exe" if IS_WINDOWS else ""
 
@@ -568,6 +584,35 @@ class Child:
         log(f"stopped {self.name}")
 
 
+class WedgeDetector:
+    """Decides when chipper needs a bounce to clear a wedged robot gateway.
+
+    Pure logic — the log tailing and the bounce itself live on Supervisor —
+    so the strike/window/cooldown behaviour is unit-testable on its own."""
+
+    def __init__(self):
+        self.strikes = collections.deque()   # times of recent robot-RPC hangs
+        self.last_bounce = None              # None = never bounced
+
+    def feed(self, line: str, now: float, link_up: bool):
+        # Strikes only count while Vector is TCP-reachable: hangs with the
+        # link UP are the wedge signature; with the link DOWN they're just a
+        # WiFi drop, which the existing link-recovery path already handles.
+        if link_up and WEDGE_PATTERN.search(line):
+            self.strikes.append(now)
+
+    def should_bounce(self, now: float) -> bool:
+        while self.strikes and now - self.strikes[0] > WEDGE_WINDOW:
+            self.strikes.popleft()
+        if (len(self.strikes) >= WEDGE_STRIKES
+                and (self.last_bounce is None
+                     or now - self.last_bounce > WEDGE_COOLDOWN)):
+            self.strikes.clear()
+            self.last_bounce = now
+            return True
+        return False
+
+
 # ── The supervisor ────────────────────────────────────────────────────────────
 
 class Supervisor:
@@ -578,6 +623,8 @@ class Supervisor:
         self.chipper = None
         self.vectorai = None
         self.vector_was_up = True   # track link transitions
+        self.wedge = WedgeDetector()
+        self._chipper_log_pos = None  # byte offset; None = not yet initialized
 
     # -- child definitions --
     def _chipper_env(self) -> dict:
@@ -638,6 +685,27 @@ class Supervisor:
     def vector_reachable(self) -> bool:
         ip = read_vector_ip()
         return bool(ip) and tcp_ok(ip, 443, timeout=4)
+
+    def _new_chipper_lines(self) -> list:
+        """Lines appended to chipper.log since the last call.
+
+        The first call only records the current size — pre-existing content
+        must not feed the wedge detector, or stale errors from before this
+        supervisor started could trigger an immediate bounce."""
+        try:
+            size = CHIPPER_LOG.stat().st_size
+        except OSError:
+            return []
+        if self._chipper_log_pos is None or size < self._chipper_log_pos:
+            self._chipper_log_pos = size   # first call, or log was rotated
+            return []
+        if size == self._chipper_log_pos:
+            return []
+        with open(CHIPPER_LOG, "rb") as f:
+            f.seek(self._chipper_log_pos)
+            data = f.read()
+            self._chipper_log_pos = f.tell()
+        return data.decode("utf-8", errors="replace").splitlines()
 
     # -- lifecycle --
     def startup(self):
@@ -744,9 +812,22 @@ class Supervisor:
                 if new_ip and update_botinfo_ip(new_ip):
                     ensure_lan_route(new_ip)
                 self.bounce_chipper("Vector link recovered")
+                # The recovery bounce gives a fresh start — drop any strikes
+                # accumulated around the outage.
+                self.wedge.strikes.clear()
             elif not up and self.vector_was_up:
                 log("Vector link lost — will reconnect when it returns")
             self.vector_was_up = up
+
+            # SDK-wedge detector: TCP up but new robot RPCs hanging (see the
+            # WEDGE_* tunables). Bouncing chipper closes every connection it
+            # holds, which is what clears the robot's gateway.
+            for line in self._new_chipper_lines():
+                self.wedge.feed(line, now, up)
+            if self.wedge.should_bounce(now):
+                log(f"SDK wedge suspected — Vector reachable on TCP but "
+                    f"robot RPCs are hanging; bouncing chipper to clear it")
+                self.bounce_chipper("suspected SDK wedge")
 
             # Periodic mDNS/hosts IP-drift check — catches a LAN IP change
             # (DHCP reassignment, interface rebind) without needing a restart.
