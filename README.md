@@ -191,7 +191,8 @@ reactions, ambient awareness, the connection-leak fix, and more) — see
    .\windows\apply-wirepod-config.ps1
    ```
 
-5. **Pair Vector** via the **Robots** tab at <http://localhost:8080>. The
+5. **Pair Vector** via the **Robots** tab at <http://localhost:8080> (or your
+   `-WebPort` choice). The
    supervisor advertises `escapepod.local` over mDNS so Vector finds the
    server automatically. It probes multiple network interfaces and filters
    VPN addresses, so it works correctly even if Tailscale or another VPN
@@ -221,7 +222,7 @@ permission to bind privileged ports without root, and registers
 
 ```bash
 bash start-vector.sh                 # bring the stack up
-# open the web UI at http://<this-machine-ip>:8080 and run the wizard
+# open the web UI at http://<this-machine-ip>:8080 (or your --web-port) and run the wizard
 bash apply-wirepod-config.sh         # apply the AI config
 # pair Vector via the Robots tab
 ```
@@ -267,6 +268,26 @@ share them kindly, and you never say "as an AI."
 
 Keep it to *who he is* — leave the commands, animations and vision rules to the
 system; they're handled separately and aren't in this file.
+
+**Changing ports** — two ports are configurable; both live in
+`vector-pod/pod.conf` (`~/vector-pod/pod.conf` on Linux):
+
+| pod.conf key | Default | Serves |
+|---|---|---|
+| `WEB_PORT` | 8080 | Wire-Pod's web UI / config server |
+| `AI_PORT`  | 8090 | the local vector-ai service (localhost only) |
+
+To change one after installation, re-run the installer with the matching flag —
+Windows `.\windows\install.ps1 -WebPort 8086 -AiPort 8091`, Linux
+`bash install.sh --web-port 8086 --ai-port 8091` — then re-run
+`apply-wirepod-config` and restart (`stop-vector` → `start-vector`). Re-running
+the installer is the supported route because it also updates the Windows
+firewall rule for the web UI port; any flag you don't pass keeps its current
+pod.conf value. (For `AI_PORT` alone, hand-editing pod.conf also works — still
+follow with `apply-wirepod-config` so chipper's LLM endpoint moves too.)
+
+The voice/pairing ports (443, 80, 8084) and Ollama's 11434 are fixed — Vector
+and the stack expect them where they are.
 
 **Logs** live in `~/vector-pod/` — `supervisor.log`, `chipper.log`,
 `vector-ai.log` (on Linux, also `journalctl -u vector-supervisor -f`).
