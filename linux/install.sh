@@ -155,6 +155,9 @@ sudo python3 "$SHARED_DIR/patches/add-sensor-reactions.py" "$WIREPOD_DIR"
 info "Fixing the gRPC connection leak (defer robot.Close() in kgsim.go)..."
 sudo python3 "$SHARED_DIR/patches/fix-connection-leak.py" "$WIREPOD_DIR/chipper/pkg/wirepod/ttr/kgsim.go"
 
+info "Fixing the sayText BehaviorControl stream leak (bcontrol.go)..."
+sudo python3 "$SHARED_DIR/patches/fix-saytext-stream-leak.py" "$WIREPOD_DIR/chipper/pkg/wirepod/ttr/bcontrol.go"
+
 info "Fixing name parsing so face enrollment captures just the name..."
 sudo python3 "$SHARED_DIR/patches/fix-name-extraction.py" "$WIREPOD_DIR/chipper/pkg/wirepod/ttr/intentparam.go"
 

@@ -126,8 +126,22 @@ func StartAmbientLoop() {
 
 func runAmbientLoop(esn, guid, target string) {
 \tfmt.Printf("[ambient] starting ambient loop for %s @ %s\\n", esn, target)
+\tfailStreak := 0
 \tfor {
-\t\ttime.Sleep(ambientInterval)
+\t\t// Failure backoff: when glances keep failing (robot asleep, link down,
+\t\t// gateway wedged) poke him less often — opening a fresh connection and
+\t\t// leaving a hanging RPC on a struggling gateway every cycle makes
+\t\t// things worse and floods the log. 3m -> 6m -> 12m -> 24m, reset on
+\t\t// the first success.
+\t\tsleep := ambientInterval
+\t\tif failStreak > 0 {
+\t\t\tshift := failStreak
+\t\t\tif shift > 3 {
+\t\t\t\tshift = 3
+\t\t\t}
+\t\t\tsleep = ambientInterval * time.Duration(1<<shift)
+\t\t}
+\t\ttime.Sleep(sleep)
 \t\t// Idle gate: glance around whenever Vector is awake and free. Being
 \t\t// docked is fine — only night hours (asleep) and an in-flight
 \t\t// conversation hold him back.
@@ -140,7 +154,11 @@ func runAmbientLoop(esn, guid, target string) {
 \t\tif ambientReactionOnCooldown() {
 \t\t\tcontinue
 \t\t}
-\t\tambientObserveOnce(esn, guid, target)
+\t\tif ambientObserveOnce(esn, guid, target) {
+\t\t\tfailStreak = 0
+\t\t} else {
+\t\t\tfailStreak++
+\t\t}
 \t}
 }
 
@@ -174,12 +192,13 @@ func askVectorAIAmbient(jpeg []byte) string {
 }
 
 // ambientObserveOnce takes one silent photo, asks vector-ai whether anything
-// is new, and speaks the reaction if there is one.
-func ambientObserveOnce(esn, guid, target string) {
+// is new, and speaks the reaction if there is one. Returns false when the
+// robot couldn't be reached or photographed, so the caller can back off.
+func ambientObserveOnce(esn, guid, target string) bool {
 \trobot, err := vector.New(vector.WithSerialNo(esn), vector.WithToken(guid), vector.WithTarget(target))
 \tif err != nil {
 \t\tfmt.Printf("[ambient] connect failed for %s: %v\\n", esn, err)
-\t\treturn
+\t\treturn false
 \t}
 \t// Release the gRPC connection when done — otherwise every cycle leaks one.
 \tdefer robot.Close()
@@ -191,7 +210,7 @@ func ambientObserveOnce(esn, guid, target string) {
 \tdefer cancel()
 \tif _, err := robot.Conn.EnableImageStreaming(ctx, &vectorpb.EnableImageStreamingRequest{Enable: true}); err != nil {
 \t\tfmt.Printf("[ambient] enable camera feed failed for %s: %v\\n", esn, err)
-\t\treturn
+\t\treturn false
 \t}
 \ttime.Sleep(1500 * time.Millisecond) // let the camera spin up
 \timg, err := robot.Conn.CaptureSingleImage(ctx, &vectorpb.CaptureSingleImageRequest{
@@ -202,12 +221,12 @@ func ambientObserveOnce(esn, guid, target string) {
 \tdisableCancel()
 \tif err != nil || img == nil || len(img.Data) == 0 {
 \t\tfmt.Printf("[ambient] image capture failed for %s: %v\\n", esn, err)
-\t\treturn
+\t\treturn false
 \t}
 
 \tline := askVectorAIAmbient(img.Data)
 \tif line == "" {
-\t\treturn // nothing novel — the overwhelmingly common case
+\t\treturn true // nothing novel — the overwhelmingly common case
 \t}
 
 \t// Re-check: a conversation may have started while we were thinking. The
@@ -215,7 +234,7 @@ func ambientObserveOnce(esn, guid, target string) {
 \t// it later — we just don't speak over the user now.
 \tif recentlyConversed() {
 \t\tfmt.Printf("[ambient] suppressing reaction (conversation in progress): %q\\n", line)
-\t\treturn
+\t\treturn true
 \t}
 
 \tfmt.Printf("[ambient] reaction: %q\\n", line)
@@ -223,6 +242,7 @@ func ambientObserveOnce(esn, guid, target string) {
 \t// Off the charger, Vector physically investigates the new thing before
 \t// commenting; docked, he simply speaks (we never drive him off his pod).
 \tambientReact(robot, line, !IsOnCharger())
+\treturn true
 }
 
 // ambientReact makes Vector react to something synchronously: it acquires
@@ -300,16 +320,29 @@ func ambientInvestigateMove(ctx context.Context, robot *vector.Vector) {
 // says it unprompted.
 func runGreetingLoop(esn, guid, target string) {
 \tfmt.Printf("[greeting] starting proactive-greeting loop for %s\\n", esn)
+\tfailStreak := 0
 \tfor {
-\t\ttime.Sleep(greetingInterval)
+\t\t// Same failure backoff as the ambient loop: 2m -> 4m -> 8m -> 16m,
+\t\t// reset on the first successful connect.
+\t\tsleep := greetingInterval
+\t\tif failStreak > 0 {
+\t\t\tshift := failStreak
+\t\t\tif shift > 3 {
+\t\t\t\tshift = 3
+\t\t\t}
+\t\t\tsleep = greetingInterval * time.Duration(1<<shift)
+\t\t}
+\t\ttime.Sleep(sleep)
 \t\tif recentlyConversed() || ambientInNightHours() {
 \t\t\tcontinue
 \t\t}
 \t\trobot, err := vector.New(vector.WithSerialNo(esn), vector.WithToken(guid), vector.WithTarget(target))
 \t\tif err != nil {
+\t\t\tfailStreak++
 \t\t\tfmt.Printf("[greeting] connect failed for %s: %v\\n", esn, err)
 \t\t\tcontinue
 \t\t}
+\t\tfailStreak = 0
 \t\tfaceID, name := probeForKnownFace(robot)
 \t\tif faceID <= 0 {
 \t\t\trobot.Close()

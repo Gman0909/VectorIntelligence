@@ -266,6 +266,9 @@ Patch "$SharedDir\patches\add-sensor-reactions.py" $WirePodDir
 Info "Fixing the gRPC connection leak (defer robot.Close() in kgsim.go)..."
 Patch "$SharedDir\patches\fix-connection-leak.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\kgsim.go")
 
+Info "Fixing the sayText BehaviorControl stream leak (bcontrol.go)..."
+Patch "$SharedDir\patches\fix-saytext-stream-leak.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\bcontrol.go")
+
 Info "Fixing name parsing so face enrollment captures just the name..."
 Patch "$SharedDir\patches\fix-name-extraction.py" (Join-Path $WirePodDir "chipper\pkg\wirepod\ttr\intentparam.go")
 
